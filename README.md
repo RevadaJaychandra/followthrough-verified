@@ -64,8 +64,44 @@ watch the pipeline rail update live. (`frontend/.env.example` already points
 |---|---|
 | ![Pipeline running](README_assets/02-pipeline-running.png) | ![Blocker detected](README_assets/03-blocker-detected.png) |
 | Commitments extracted, one executing, two waiting on dependencies | The monitoring loop autonomously flips the rail to BLOCKED |
-| ![Murph escalation](README_assets/04-murph-escalation.png) | ![All verified](README_assets/06-all-verified.png) |
-| Murph drafts the escalation and waits for approval before sending | Blocker cleared, PRs merged, the dependency chain cascades to VERIFIED |
+| ![Agent cannot self-approve](README_assets/05-agent-cannot-self-approve.png) | ![All verified](README_assets/08-all-verified.png) |
+| Murph drafts an escalation and **cannot send it** — telling the agent "yes send it" changes nothing | Blocker cleared, PRs merged, the dependency chain cascades to VERIFIED |
+
+---
+
+## The one thing worth reading the code for
+
+**An agent here cannot send email. Not "is told not to" — cannot.**
+
+Escalation is the only action in this system that is irreversible and visible
+outside the team, so it is the one an agent must never take alone. The gate is
+a state machine, not a prompt:
+
+```
+Murph drafts  ─▶  PENDING_APPROVAL  ──approve──▶  APPROVED  ──▶  SENT
+                        │                             ▲
+                        └────reject────▶ REJECTED     │
+                                                      │
+                              only POST /escalations/{id}/approve
+                              writes this state, and no agent has a
+                              tool that reaches it
+```
+
+`send_escalation` is a tool Murph *can* call, and it refuses anything that is
+not already `APPROVED`. So a prompt injection in a transcript, a hallucinated
+"the user said yes", or a model update that reads the instruction differently
+all produce the same result: nothing is sent.
+
+The smoke test asserts this directly rather than taking it on faith:
+
+```
+PASS: draft is queued as PENDING_APPROVAL, not sent
+PASS: agent cannot self-approve: still PENDING_APPROVAL after 'yes send it'
+PASS: human approval sends it, commitment state updated
+```
+
+See [`docs/03-PHASE-3-HARDENING.md`](docs/03-PHASE-3-HARDENING.md) for what
+this looked like before, and why prompt-level gating was not enough.
 
 ---
 
@@ -79,7 +115,12 @@ Copy `backend/.env.example` to `backend/.env` and fill in:
 | `GITHUB_TOKEN` | https://github.com/settings/tokens — classic token, `repo` scope | Creating/monitoring real GitHub issues |
 | `GITHUB_REPO` | A throwaway repo you create, e.g. `yourname/followthrough-demo` | Same as above |
 | `GMAIL_SENDER` / `GMAIL_APP_PASSWORD` | https://myaccount.google.com/apppasswords | Escalation emails |
+| `ESCALATION_RECIPIENT` | An inbox you can check live during the demo | Default escalation target |
+| `GITHUB_USER_MAP` (optional) | `Name=github-username,Name=github-username` | Assigning created issues. An unmapped name is fine (unassigned issue); a **wrong** username makes GitHub reject the issue outright |
 | `GEMINI_API_KEY` (optional, alternative to Vertex) | https://aistudio.google.com/apikey | Faster path to test extraction alone before full GCP IAM is set up |
+
+There is a step-by-step runbook with verification checks for each integration
+in [`docs/02-PHASE-2-CREDENTIALS.md`](docs/02-PHASE-2-CREDENTIALS.md).
 
 Run `python3 config.py` after filling in `.env` — it tells you exactly
 which values are still missing or still placeholders, with no network
@@ -105,11 +146,17 @@ Execution Agent (ADK LlmAgent + GitHub tool) ──► GitHub Issues
     │
     ▼
 Monitoring Agent (polling loop) ──► checks GitHub state, detects blockers,
-    │                                verifies merged PRs
+    │                                detects missed deadlines, releases
+    │                                dependents, verifies merged PRs
     ▼
-Murph (ADK LlmAgent, voice/chat) ──► queries Firestore, drafts + sends
-                                       approved escalation emails
+Murph (ADK LlmAgent, voice/chat) ──► queries Firestore, drafts escalations
+    │
+    ▼
+Approval gate (human only) ────────► the drafted email is sent, or is not
 ```
+
+The monitoring agent never sends anything, and neither does Murph. Both can
+only put an escalation in the queue; a person decides.
 
 **Google Cloud stack used:** Vertex AI (Gemini), ADK, Firestore, Pub/Sub,
 Cloud Run.
@@ -224,6 +271,18 @@ static-serving Dockerfile — whichever is fastest for the team).
 
 ## What's real vs. simplified for the hackathon timeline
 
-- **Real**: Gemini extraction, ADK agents (Execution + Murph), Firestore state, Pub/Sub decoupling between meeting-processed → execution, GitHub issue/PR lifecycle, human-approval-gated escalation email.
-- **Simplified**: Monitoring runs as a polling loop (not Cloud Scheduler → Eventarc → Cloud Run) — same visible behavior, less deploy complexity for the timeline. Dependency detection is single-level (task A blocks task B) rather than a general graph solver. Calendar integration is out of scope.
-- **Offline mode** (`OFFLINE_MODE=true`): every external call (Gemini, Firestore, Pub/Sub, GitHub, Gmail) has an in-memory fallback behind the exact same function signatures, so the full pipeline is testable and demoable with zero credentials. This is a dev/testing aid, not part of the submission's live architecture — the real submission runs with `OFFLINE_MODE=false` and every call hitting the real Google Cloud + GitHub + Gmail services, which is what the architecture diagram and demo video should show.
+- **Real**: Gemini extraction, ADK agents (Execution + Murph), Firestore state, Pub/Sub decoupling between meeting-processed → execution, GitHub issue/PR lifecycle, escalation email gated behind approval that is enforced in state.
+- **Simplified**: Monitoring runs as a polling loop (not Cloud Scheduler → Eventarc → Cloud Run) — same visible behavior, less deploy complexity for the timeline. Dependency detection is single-level (task A blocks task B) rather than a general graph solver. Calendar integration is out of scope. `task-created` / `task-blocked` / `task-verified` are published but nothing subscribes to them yet; they are the extension seam for a Slack notifier or analytics sink.
+- **Deliberately not done**: the API has no authentication. Adding it means an identity provider, token handling in the frontend, and a login step in the middle of the demo — real work to defend throwaway hackathon data for a weekend. What *was* done is the part that matters: CORS is restricted (`CORS_ALLOWED_ORIGINS`), so a random page in a browser cannot drive the escalation-approval endpoints.
+- **Offline mode** (`OFFLINE_MODE=true`): every external call (Gemini, Firestore, Pub/Sub, GitHub, Gmail) has an in-memory fallback behind the exact same function signatures, so the full pipeline is testable and demoable with zero credentials. This is a dev/testing aid, not part of the submission's live architecture — the real submission runs with `OFFLINE_MODE=false` and every call hitting the real Google Cloud + GitHub + Gmail services, which is what the architecture diagram and demo video should show. When it is on, the dashboard shows an `OFFLINE` chip so the UI never implies a real issue was filed.
+
+## Project documentation
+
+Each phase of work is recorded in [`docs/`](docs/):
+
+| Doc | Contents |
+|---|---|
+| [00-PROJECT-AUDIT.md](docs/00-PROJECT-AUDIT.md) | Baseline audit: architecture, 16 identified gaps, phase plan |
+| [01-PHASE-1-PROVE-IT.md](docs/01-PHASE-1-PROVE-IT.md) | Getting it running; the BLOCKED-is-a-dead-end bug |
+| [02-PHASE-2-CREDENTIALS.md](docs/02-PHASE-2-CREDENTIALS.md) | Credential runbook — the one phase that needs a human |
+| [03-PHASE-3-HARDENING.md](docs/03-PHASE-3-HARDENING.md) | Enforcing the approval gate; closing the remaining gaps |

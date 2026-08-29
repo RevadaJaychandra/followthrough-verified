@@ -1,0 +1,422 @@
+.mono { font-family: var(--font-mono); }
+.dot { color: var(--text-faint); margin: 0 6px; }
+.link { color: var(--state-progress); text-decoration: none; }
+.link:hover { text-decoration: underline; }
+
+.empty-state {
+  color: var(--text-dim);
+  font-size: 14px;
+  padding: 40px 20px;
+  text-align: center;
+  border: 1px dashed var(--panel-border);
+  border-radius: 8px;
+}
+.empty-state--small { padding: 20px; font-size: 13px; }
+
+/* ---------- App shell ---------- */
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 28px 40px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0 20px;
+  border-bottom: 1px solid var(--panel-border);
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.app-header__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-header__mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--state-progress), var(--state-verified));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+  color: #0B0D12;
+  letter-spacing: -0.5px;
+}
+
+.app-header__title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+
+.app-header__subtitle {
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.app-header__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.summary-chip {
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  padding: 4px 10px;
+  border-radius: 20px;
+}
+
+.app-header__new {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  font-size: 12px;
+  padding: 7px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: var(--font-display);
+  transition: border-color 0.15s;
+}
+.app-header__new:hover { border-color: var(--state-progress); }
+
+.app-main {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .app-main { grid-template-columns: 1fr; }
+}
+
+.app-main__left {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* ---------- Murph bar ---------- */
+
+.murph-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+}
+
+.murph-bar__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--state-progress);
+  letter-spacing: 1px;
+  flex-shrink: 0;
+}
+
+.murph-bar__input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 14px;
+  font-family: var(--font-display);
+  outline: none;
+}
+.murph-bar__input::placeholder { color: var(--text-faint); }
+
+.murph-bar__mic {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  cursor: pointer;
+  font-size: 14px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+.murph-bar__mic.is-listening {
+  border-color: var(--state-blocked);
+  color: var(--state-blocked);
+  animation: pulse 1s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.murph-bar__send {
+  background: var(--state-progress);
+  border: none;
+  color: #0B0D12;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.murph-bar__send:disabled { opacity: 0.5; cursor: default; }
+
+.murph-log {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+}
+
+.murph-log__entry {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.murph-log__role {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-right: 8px;
+}
+.murph-log__entry--murph .murph-log__role { color: var(--state-progress); }
+
+/* ---------- Upload panel ---------- */
+
+.upload-panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.upload-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.upload-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.upload-panel__sample {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.upload-panel__input,
+.upload-panel__textarea {
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 10px 12px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  outline: none;
+  resize: vertical;
+}
+.upload-panel__input:focus,
+.upload-panel__textarea:focus {
+  border-color: var(--state-progress);
+}
+
+.upload-panel__error {
+  color: var(--state-blocked);
+  font-size: 12px;
+}
+
+.upload-panel__submit {
+  background: var(--state-verified);
+  border: none;
+  color: #0B0D12;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.upload-panel__submit:disabled { opacity: 0.5; cursor: default; }
+
+/* ---------- Commitment pipeline ---------- */
+
+.pipeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rail-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.rail-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.rail-card__desc {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.rail-card__meta {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+.state-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 3px 9px;
+  border: 1px solid;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+.rail-track {
+  display: flex;
+  align-items: center;
+}
+
+.rail-step {
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+.rail-step:last-child { flex: 0; }
+
+.rail-step__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--panel-border);
+  background: var(--bg);
+  flex-shrink: 0;
+  transition: all 0.3s;
+}
+.rail-step__dot.is-filled {
+  box-shadow: 0 0 8px currentColor;
+}
+
+.rail-step__line {
+  height: 2px;
+  flex: 1;
+  background: var(--panel-border);
+  transition: background 0.3s;
+}
+
+.rail-exception {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+  border: 1px solid;
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: rgba(229, 72, 77, 0.06);
+}
+
+.rail-exception__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ---------- Event ticker ---------- */
+
+.ticker {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 16px;
+  max-height: 640px;
+  display: flex;
+  flex-direction: column;
+}
+
+.ticker__header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+}
+
+.ticker__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.ticker__row {
+  display: grid;
+  grid-template-columns: 16px auto 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+.ticker__icon {
+  color: var(--state-progress);
+  font-size: 11px;
+}
+
+.ticker__time {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.ticker__msg {
+  color: var(--text);
+  line-height: 1.4;
+}

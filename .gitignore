@@ -1,0 +1,27 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.env.local
+
+# Node
+node_modules/
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# GCP service-account keys — never commit these.
+# (Scoped deliberately: a blanket *.json also swallowed .oxlintrc.json.)
+*-key.json
+*-credentials.json
+service-account*.json
+application_default_credentials.json
+gcp-*.json
+
+# Local run artifacts
+backend/*.log
+*.log

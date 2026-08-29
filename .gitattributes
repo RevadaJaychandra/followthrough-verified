@@ -1,0 +1,7 @@
+# Shell scripts and the Dockerfile must keep LF endings — CRLF breaks them
+# under WSL bash, Docker, and Cloud Build.
+*.sh text eol=lf
+Dockerfile text eol=lf
+
+# Normalize everything else, let git decide the working-copy ending.
+* text=auto

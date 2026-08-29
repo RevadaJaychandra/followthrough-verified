@@ -23,14 +23,16 @@ cd "$(dirname "$0")"
 export OFFLINE_MODE=true
 export GCP_PROJECT_ID=smoke-test
 
+SMOKE_LOG=$(mktemp -t followthrough_smoke.XXXXXX.log)
+
 echo "Starting server in OFFLINE_MODE..."
-uvicorn main:app --host 0.0.0.0 --port 8080 > /tmp/followthrough_smoke.log 2>&1 &
+uvicorn main:app --host 0.0.0.0 --port 8080 > $SMOKE_LOG 2>&1 &
 PID=$!
 trap "kill $PID 2>/dev/null" EXIT
 sleep 3
 
 pass() { echo "  PASS: $1"; }
-fail() { echo "  FAIL: $1"; echo "--- server log ---"; cat /tmp/followthrough_smoke.log; exit 1; }
+fail() { echo "  FAIL: $1"; echo "--- server log ---"; cat $SMOKE_LOG; exit 1; }
 
 echo "[1/6] Health check"
 curl -sf http://localhost:8080/health > /dev/null && pass "server responds" || fail "server not responding"
@@ -51,10 +53,16 @@ WAITING=$(echo "$COMMITMENTS" | python3 -c "import json,sys; print(sum(1 for c i
 
 CMT_ID=$(echo "$COMMITMENTS" | python3 -c "import json,sys; d=json.load(sys.stdin); print([c['id'] for c in d if c['state']=='IN_PROGRESS'][0])")
 
-echo "[4/6] Blocker detection (waiting ~32s for monitoring poll)..."
+echo "[4/6] Blocker detection (polling up to 12s for the monitoring loop)..."
 curl -sf -X POST http://localhost:8080/commitments/$CMT_ID/label -H "Content-Type: application/json" -d '{"label": "blocked"}' > /dev/null
-sleep 32
-STATE=$(curl -sf http://localhost:8080/commitments | python3 -c "import json,sys; d=json.load(sys.stdin); print([c['state'] for c in d if c['id']=='$CMT_ID'][0])")
+# The monitoring loop runs every 5s (see _monitoring_loop in main.py), so
+# poll for up to 12s rather than sleeping a fixed 32s.
+STATE=""
+for _ in $(seq 1 12); do
+  STATE=$(curl -sf http://localhost:8080/commitments | python3 -c "import json,sys; d=json.load(sys.stdin); print([c['state'] for c in d if c['id']=='$CMT_ID'][0])")
+  [ "$STATE" = "BLOCKED" ] && break
+  sleep 1
+done
 [ "$STATE" = "BLOCKED" ] && pass "monitoring loop autonomously detected the blocker" || fail "expected BLOCKED, got $STATE"
 
 echo "[5/6] Murph: status + escalation flow"

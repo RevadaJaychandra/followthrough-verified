@@ -5,35 +5,67 @@ meeting transcripts, creates and tracks GitHub issues, monitors progress,
 detects blockers, escalates with human approval, and verifies completion —
 built for the All Things Agentic Hackathon (Taskmaster track).
 
+![FollowThrough dashboard with a blocker detected](README_assets/03-blocker-detected.png)
+
 ## Quickstart — verify everything works with ZERO credentials (do this first)
 
 Every external call (Gemini, Firestore, Pub/Sub, GitHub, Gmail) has an
 offline-mode fallback, so you can prove the whole architecture works
 before anyone touches an API key.
 
+**macOS / Linux**
 ```bash
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-bash smoke_test.sh
+python smoke_test.py
+```
+
+**Windows (PowerShell)**
+```powershell
+cd backend
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python smoke_test.py
 ```
 
 This boots the real FastAPI server, uploads a real transcript, watches
 the real dependency-aware execution logic run, waits for the real
-monitoring loop to detect a blocker, and drives the full Murph
-escalation conversation — all in-memory, no GCP/GitHub/Gmail needed.
-If `smoke_test.sh` prints `ALL PASSED`, the architecture is verified
-sound and every remaining step is just plugging in real credentials.
+monitoring loop to detect a blocker, drives the full Murph escalation
+conversation, and confirms a blocked commitment can recover and reach
+VERIFIED — all in-memory, no GCP/GitHub/Gmail needed. If it prints
+`ALL PASSED`, the architecture is verified sound and every remaining
+step is just plugging in real credentials.
+
+`smoke_test.py` is the canonical test and runs anywhere Python does.
+`smoke_test.sh` is the bash equivalent, kept for Linux and CI; it needs
+`curl` and a `python3` on PATH that is new enough to run the app.
 
 To see it in the dashboard instead of curl:
 ```bash
 # terminal 1
 cd backend && OFFLINE_MODE=true GCP_PROJECT_ID=dev uvicorn main:app --reload --port 8080
 # terminal 2
-cd frontend && npm install && VITE_API_BASE=http://localhost:8080 npm run dev
+cd frontend && npm install && npm run dev
+```
+```powershell
+# Windows equivalents
+cd backend; $env:OFFLINE_MODE='true'; $env:GCP_PROJECT_ID='dev'; .venv\Scripts\python.exe -m uvicorn main:app --reload --port 8080
+cd frontend; npm install; npm run dev
 ```
 Open `http://localhost:5173`, click **"Use sample"** → **Process meeting**,
-watch the pipeline rail update live.
+watch the pipeline rail update live. (`frontend/.env.example` already points
+`VITE_API_BASE` at `http://localhost:8080`; copy it to `frontend/.env`.)
+
+### What the offline run looks like
+
+| | |
+|---|---|
+| ![Pipeline running](README_assets/02-pipeline-running.png) | ![Blocker detected](README_assets/03-blocker-detected.png) |
+| Commitments extracted, one executing, two waiting on dependencies | The monitoring loop autonomously flips the rail to BLOCKED |
+| ![Murph escalation](README_assets/04-murph-escalation.png) | ![All verified](README_assets/06-all-verified.png) |
+| Murph drafts the escalation and waits for approval before sending | Blocker cleared, PRs merged, the dependency chain cascades to VERIFIED |
 
 ---
 
@@ -147,10 +179,11 @@ Visit `http://localhost:5173`.
 
 1. Open the dashboard, click **"Use sample"** in the upload panel, then **Process meeting**.
 2. Watch the pipeline: commitments appear, GitHub issues get created automatically (event ticker on the right shows every step).
-3. To simulate a blocker live: `POST /commitments/{id}/label {"label": "blocked"}` (or add the `blocked` label to the GitHub issue directly) — the monitoring loop picks it up within ~30s and the rail flips to BLOCKED.
+3. To simulate a blocker live: `POST /commitments/{id}/label {"label": "blocked"}` (or add the `blocked` label to the GitHub issue directly) — the monitoring loop runs every 5s, so the rail flips to BLOCKED almost immediately.
 4. Ask Murph: *"What's blocked?"* — it reads live Firestore state and answers.
 5. Say *"Ask [owner] about it"* — Murph drafts an escalation and asks for confirmation before sending.
-6. Merge the linked PR on GitHub — monitoring loop detects it, marks VERIFIED.
+6. Remove the `blocked` label (`DELETE /commitments/{id}/label/blocked`, or unlabel the issue on GitHub) — the escalation worked, and monitoring returns the commitment to IN_PROGRESS.
+7. Merge the linked PR on GitHub — monitoring loop detects it, marks VERIFIED, and any commitment waiting on it starts automatically.
 
 ## Recommended order for switching from offline to real credentials
 

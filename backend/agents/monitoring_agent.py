@@ -19,20 +19,28 @@ from tools.github_tool import get_issue_status
 
 BLOCKED_LABEL = "blocked"
 
+# States where the commitment is live work we should keep polling GitHub for.
+# BLOCKED and ESCALATED belong here: a blocked task can have its label removed
+# or its PR merged after someone unblocks it, and that is the entire point of
+# escalating. Polling only IN_PROGRESS made those two states dead ends — the
+# commitment could never be verified and everything depending on it waited
+# forever.
+ACTIVE_STATES = ("IN_PROGRESS", "BLOCKED", "ESCALATED")
+
 
 async def check_all_commitments():
     """One monitoring pass over all non-terminal commitments.
 
     Two phases, in order: first resolve GitHub-derived state (blocked/
-    verified) for IN_PROGRESS commitments, THEN check dependencies for
-    WAITING commitments. This ordering matters — a commitment that gets
+    unblocked/verified) for every active commitment, THEN check dependencies
+    for WAITING commitments. This ordering matters — a commitment that gets
     verified in phase 1 should be able to unblock its dependent in the
     same pass, not wait for the next tick.
     """
     commitments = store.list_commitments()
 
     for cmt in commitments:
-        if cmt.get("state") == "IN_PROGRESS":
+        if cmt.get("state") in ACTIVE_STATES:
             _check_github_progress(cmt)
 
     # Re-fetch: phase 1 may have changed states (e.g. IN_PROGRESS -> VERIFIED)
@@ -80,7 +88,10 @@ def _check_github_progress(cmt: dict):
         _verify(cmt)
         return
 
-    if BLOCKED_LABEL in labels and cmt.get("state") != "BLOCKED":
+    state = cmt.get("state")
+    is_blocked_now = BLOCKED_LABEL in labels
+
+    if is_blocked_now and state not in ("BLOCKED", "ESCALATED"):
         store.update_commitment(
             cmt["id"], state="BLOCKED",
             blocked_reason="Issue labeled 'blocked' on GitHub",
@@ -88,6 +99,18 @@ def _check_github_progress(cmt: dict):
         store.log_event(
             meeting_id=cmt["meeting_id"], commitment_id=cmt["id"],
             kind="blocker_detected", message="Blocker detected via GitHub label",
+        )
+        return
+
+    if not is_blocked_now and state in ("BLOCKED", "ESCALATED"):
+        # Somebody removed the 'blocked' label — the escalation worked, or
+        # the owner resolved it themselves. Return the commitment to active
+        # work so it can progress to COMPLETED/VERIFIED normally.
+        store.update_commitment(cmt["id"], state="IN_PROGRESS", blocked_reason=None)
+        store.log_event(
+            meeting_id=cmt["meeting_id"], commitment_id=cmt["id"],
+            kind="blocker_cleared",
+            message="'blocked' label removed on GitHub, work resumed",
         )
         return
 

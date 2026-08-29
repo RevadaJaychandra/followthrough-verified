@@ -146,6 +146,32 @@ def add_label(issue_number: int, label: str) -> dict:
         return {"status": "error", "message": str(e)}
 
 
+def remove_label(issue_number: int, label: str) -> dict:
+    """Remove a label from a GitHub issue (e.g. clearing 'blocked' once the
+    work has been unblocked).
+
+    Args:
+        issue_number: The GitHub issue number.
+        label: Label name to remove. Removing a label that is not present
+            is treated as success, so this is safe to call repeatedly.
+    """
+    if config.OFFLINE_MODE:
+        issue = _mock_issues.get(issue_number)
+        if not issue:
+            return {"status": "error", "message": "mock issue not found"}
+        if label in issue["labels"]:
+            issue["labels"].remove(label)
+        return {"status": "success"}
+
+    try:
+        issue = _repo().get_issue(issue_number)
+        if any(l.name == label for l in issue.labels):
+            issue.remove_from_labels(label)
+        return {"status": "success"}
+    except GithubException as e:
+        return {"status": "error", "message": str(e)}
+
+
 def comment_on_issue(issue_number: int, comment: str) -> dict:
     """Post a comment on a GitHub issue (used for agent status updates).
 

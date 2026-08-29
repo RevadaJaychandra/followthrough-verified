@@ -1,8 +1,3 @@
-const STAGES = [
-  'CREATED', 'PLANNED', 'IN_PROGRESS', 'WAITING',
-  'BLOCKED', 'ESCALATED', 'COMPLETED', 'VERIFIED',
-];
-
 const STAGE_COLOR = {
   CREATED: 'var(--state-created)',
   PLANNED: 'var(--state-planned)',
@@ -18,7 +13,7 @@ const STAGE_COLOR = {
 // as a branch/badge since they're exception states, not always visited.
 const MAIN_LINE = ['CREATED', 'PLANNED', 'IN_PROGRESS', 'WAITING', 'COMPLETED', 'VERIFIED'];
 
-function CommitmentRail({ commitment, onLabelBlocked }) {
+function CommitmentRail({ commitment }) {
   const { description, owner, deadline, state, blocked_reason, github_issue_url } = commitment;
   const isException = state === 'BLOCKED' || state === 'ESCALATED';
   const currentIndex = MAIN_LINE.indexOf(state);

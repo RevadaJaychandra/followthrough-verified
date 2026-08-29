@@ -420,3 +420,19 @@
   color: var(--text);
   line-height: 1.4;
 }
+
+/* Listening indicator for the Murph mic button — replaces the old emoji
+   glyph so it renders identically everywhere. */
+.murph-bar__pulse {
+  display: block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--state-blocked, #f87171);
+  animation: murph-pulse 1s ease-in-out infinite;
+}
+
+@keyframes murph-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(0.72); }
+}

@@ -4,6 +4,7 @@ const KIND_ICON = {
   github_issue_created: '⎘',
   state_change: '→',
   blocker_detected: '⚠',
+  blocker_cleared: '⟲',
   escalation_drafted: '✉',
   escalation_sent: '✉',
   dependency_resolved: '⇢',

@@ -30,7 +30,7 @@ from agents.meeting_intel import extract_commitments
 from agents.execution_agent import execute_commitment
 from agents.monitoring_agent import check_all_commitments
 from agents.murph_agent import ask_murph
-from tools.github_tool import add_label, mock_merge_pr
+from tools.github_tool import add_label, remove_label, mock_merge_pr
 
 app = FastAPI(title="FollowThrough API")
 
@@ -119,6 +119,17 @@ def label_commitment(commitment_id: str, payload: LabelRequest):
         raise HTTPException(status_code=404, detail="commitment or issue not found")
     result = add_label(cmt["github_issue_number"], payload.label)
     return result
+
+
+@app.delete("/commitments/{commitment_id}/label/{label}")
+def unlabel_commitment(commitment_id: str, label: str):
+    """Remove a label from a commitment's GitHub issue — used to clear the
+    'blocked' label live during the demo. The monitoring loop notices on its
+    next pass and returns the commitment to IN_PROGRESS."""
+    cmt = store.get_commitment(commitment_id)
+    if not cmt or not cmt.get("github_issue_number"):
+        raise HTTPException(status_code=404, detail="commitment or issue not found")
+    return remove_label(cmt["github_issue_number"], label)
 
 
 @app.post("/commitments/{commitment_id}/mock-merge")

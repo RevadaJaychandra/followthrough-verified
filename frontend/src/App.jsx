@@ -24,6 +24,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // The backend is the external system here: agents mutate commitment
+    // state on their own schedule, so the dashboard polls rather than
+    // deriving this during render. The immediate refresh() avoids a blank
+    // first paint while we wait out the first interval.
+    // oxlint-disable-next-line react/set-state-in-effect
     refresh();
     const id = setInterval(refresh, POLL_INTERVAL_MS);
     return () => clearInterval(id);

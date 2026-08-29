@@ -15,11 +15,15 @@ What it proves, in order:
   3. Dependency-aware execution: the independent commitment gets a GitHub
      issue immediately, the dependent one parks as WAITING
   4. The monitoring loop autonomously detects a blocker
-  5. Murph reflects live state and can draft + send an approved escalation
+  5. Murph reflects live state, drafts an escalation, and CANNOT send it —
+     telling the agent "yes send it" leaves the draft PENDING_APPROVAL;
+     only a human approval through the API actually sends
   6. PR merge -> VERIFIED, and the waiting dependent task auto-unblocks
      and gets its own issue in the same monitoring pass
   7. A BLOCKED/ESCALATED commitment is not a dead end: clearing the
      'blocked' label returns it to IN_PROGRESS and it can still be verified
+  8. Spoken deadline phrases ("by Friday") resolve to real dates, and
+     ambiguous ones resolve to nothing rather than a wrong guess
 
 Exit code 0 and "ALL PASSED" means the architecture is sound and the only
 remaining work is plugging in real credentials (see README.md).
@@ -108,13 +112,13 @@ def main():
             cwd=str(BACKEND_DIR), env=env, stdout=log_file, stderr=subprocess.STDOUT,
         )
         try:
-            print("[1/7] Health check")
+            print("[1/8] Health check")
             if wait_for_server(log_path):
                 pass_("server responds")
             else:
                 fail("server not responding", log_path)
 
-            print("[2/7] Upload meeting + extraction")
+            print("[2/8] Upload meeting + extraction")
             resp = request("/meetings", "POST", {
                 "title": "Standup",
                 "transcript": (
@@ -128,7 +132,7 @@ def main():
             else:
                 fail(f"expected 2 commitments, got {count}", log_path)
 
-            print("[3/7] Dependency-aware execution")
+            print("[3/8] Dependency-aware execution")
             # The Pub/Sub subscriber runs execution on a background thread.
             deadline = time.time() + 15
             commitments = []
@@ -147,7 +151,7 @@ def main():
                      f"{len(in_progress)} + {len(waiting)}", log_path)
             cmt_id = in_progress[0]["id"]
 
-            print(f"[4/7] Blocker detection (waiting up to {MONITOR_WAIT}s for monitoring poll)...")
+            print(f"[4/8] Blocker detection (waiting up to {MONITOR_WAIT}s for monitoring poll)...")
             request(f"/commitments/{cmt_id}/label", "POST", {"label": "blocked"})
             state = wait_for_state(cmt_id, "BLOCKED", MONITOR_WAIT)
             if state == "BLOCKED":
@@ -155,7 +159,7 @@ def main():
             else:
                 fail(f"expected BLOCKED, got {state}", log_path)
 
-            print("[5/7] Murph: status + escalation flow")
+            print("[5/8] Murph: status + human-approval-gated escalation")
             reply = request("/murph", "POST", {"query": "whats blocked"})["reply"]
             if "blocked" in reply.lower():
                 pass_("Murph correctly reports the blocker")
@@ -168,11 +172,35 @@ def main():
             else:
                 fail(f"Murph didn't draft escalation: {reply}", log_path)
 
-            reply = request("/murph", "POST", {"query": "yes send it"})["reply"]
-            if "sent" in reply.lower():
-                pass_("Murph sent the escalation, commitment state updated")
+            pending = request("/escalations?status=PENDING_APPROVAL")
+            if len(pending) == 1:
+                pass_("draft is queued as PENDING_APPROVAL, not sent")
             else:
-                fail(f"Escalation send failed: {reply}", log_path)
+                fail(f"expected 1 pending escalation, got {len(pending)}", log_path)
+            escalation_id = pending[0]["id"]
+
+            # The safety property: telling the agent to send it is not
+            # approval. Nothing may leave the building until a human approves.
+            reply = request("/murph", "POST", {"query": "yes send it now"})["reply"]
+            still = request(f"/escalations")[0]["status"]
+            if still == "PENDING_APPROVAL":
+                pass_("agent cannot self-approve: still PENDING_APPROVAL after 'yes send it'")
+            else:
+                fail(f"approval gate leaked — status became {still} without human approval "
+                     f"(Murph said: {reply})", log_path)
+
+            result = request(f"/escalations/{escalation_id}/approve", "POST",
+                             {"approved_by": "smoke-test-human"})
+            if result["escalation"]["status"] == "SENT":
+                pass_("human approval sends it, commitment state updated")
+            else:
+                fail(f"approved escalation not sent: {result}", log_path)
+
+            state = wait_for_state(cmt_id, "ESCALATED", 5)
+            if state == "ESCALATED":
+                pass_("commitment moved to ESCALATED")
+            else:
+                fail(f"expected ESCALATED, got {state}", log_path)
         finally:
             server.terminate()
             try:
@@ -180,7 +208,7 @@ def main():
             except subprocess.TimeoutExpired:
                 server.kill()
 
-    print("[6/7] Completion + dependency auto-unblock (in-process, no server needed)")
+    print("[6/8] Completion + dependency auto-unblock (in-process, no server needed)")
     result = subprocess.run(
         [sys.executable, "-c", _INPROCESS_CHECK],
         cwd=str(BACKEND_DIR), env=env, capture_output=True, text=True,
@@ -190,11 +218,21 @@ def main():
     else:
         fail(f"dependency/verification chain broken:\n{result.stdout}\n{result.stderr}")
 
-    print("[7/7] Blocked commitment recovers (regression: BLOCKED was a dead end)")
+    print("[7/8] Blocked commitment recovers (regression: BLOCKED was a dead end)")
     if "STEP7_OK" in result.stdout:
         pass_("blocked -> label cleared -> IN_PROGRESS -> merged -> VERIFIED")
     else:
         fail(f"blocked commitment could not recover:\n{result.stdout}\n{result.stderr}")
+
+    print("[8/8] Deadline parsing")
+    deadline_result = subprocess.run(
+        [sys.executable, "test_deadlines.py"],
+        cwd=str(BACKEND_DIR), env=env, capture_output=True, text=True,
+    )
+    if deadline_result.returncode == 0:
+        pass_("spoken deadline phrases resolve correctly, ambiguous ones stay None")
+    else:
+        fail(f"deadline parsing broken:\n{deadline_result.stdout}\n{deadline_result.stderr}")
 
     print()
     print("ALL PASSED — full pipeline verified with zero real credentials.")

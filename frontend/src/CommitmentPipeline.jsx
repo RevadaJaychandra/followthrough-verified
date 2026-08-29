@@ -1,3 +1,5 @@
+import DemoControls from './DemoControls';
+
 const STAGE_COLOR = {
   CREATED: 'var(--state-created)',
   PLANNED: 'var(--state-planned)',
@@ -13,7 +15,7 @@ const STAGE_COLOR = {
 // as a branch/badge since they're exception states, not always visited.
 const MAIN_LINE = ['CREATED', 'PLANNED', 'IN_PROGRESS', 'WAITING', 'COMPLETED', 'VERIFIED'];
 
-function CommitmentRail({ commitment }) {
+function CommitmentRail({ commitment, showDemoControls, offlineMode, onAction }) {
   const { description, owner, deadline, state, blocked_reason, github_issue_url } = commitment;
   const isException = state === 'BLOCKED' || state === 'ESCALATED';
   const currentIndex = MAIN_LINE.indexOf(state);
@@ -68,11 +70,19 @@ function CommitmentRail({ commitment }) {
           ))}
         </div>
       )}
+
+      {showDemoControls && (
+        <DemoControls
+          commitment={commitment}
+          offlineMode={offlineMode}
+          onAction={onAction}
+        />
+      )}
     </div>
   );
 }
 
-export default function CommitmentPipeline({ commitments }) {
+export default function CommitmentPipeline({ commitments, showDemoControls, offlineMode, onAction }) {
   if (!commitments.length) {
     return (
       <div className="empty-state">
@@ -84,7 +94,13 @@ export default function CommitmentPipeline({ commitments }) {
   return (
     <div className="pipeline">
       {commitments.map((c) => (
-        <CommitmentRail key={c.id} commitment={c} />
+        <CommitmentRail
+          key={c.id}
+          commitment={c}
+          showDemoControls={showDemoControls}
+          offlineMode={offlineMode}
+          onAction={onAction}
+        />
       ))}
     </div>
   );

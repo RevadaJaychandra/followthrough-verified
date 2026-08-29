@@ -1,0 +1,14 @@
+{
+  "//": "Composite indexes Firestore cannot infer. Single-field indexes are automatic; a query that filters on one field and orders by another needs an explicit composite index or it fails with FailedPrecondition at runtime. deploy.sh creates these; store.py falls back to a client-side sort if they are missing so a fresh project still works.",
+  "indexes": [
+    {
+      "collectionGroup": "events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "meeting_id", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

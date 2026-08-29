@@ -13,6 +13,13 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  getHealth: () => request('/health'),
+
+  // OFFLINE_MODE only. In real mode you merge the PR on GitHub and the
+  // monitoring agent notices on its next pass.
+  mockMerge: (commitmentId) =>
+    request(`/commitments/${commitmentId}/mock-merge`, { method: 'POST' }),
+
   uploadMeeting: (title, transcript) =>
     request('/meetings', {
       method: 'POST',
@@ -35,5 +42,25 @@ export const api = {
     request(`/commitments/${commitmentId}/label`, {
       method: 'POST',
       body: JSON.stringify({ label }),
+    }),
+
+  unlabelCommitment: (commitmentId, label) =>
+    request(`/commitments/${commitmentId}/label/${label}`, { method: 'DELETE' }),
+
+  getEscalations: (status) =>
+    request(`/escalations${status ? `?status=${status}` : ''}`),
+
+  // Approving is deliberately the only way an escalation email can be sent.
+  // No agent has a tool for this; it exists solely as a human action.
+  approveEscalation: (escalationId, approvedBy) =>
+    request(`/escalations/${escalationId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ approved_by: approvedBy }),
+    }),
+
+  rejectEscalation: (escalationId, approvedBy) =>
+    request(`/escalations/${escalationId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ approved_by: approvedBy }),
     }),
 };

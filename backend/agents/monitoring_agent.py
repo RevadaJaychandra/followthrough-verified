@@ -1,20 +1,46 @@
 """Monitoring Agent.
 
 Runs on a timer (see main.py's scheduler loop / Cloud Scheduler in prod).
-For every commitment currently IN_PROGRESS or WAITING, it:
+For every commitment currently IN_PROGRESS, BLOCKED, ESCALATED or WAITING, it:
   - checks GitHub issue/PR status
   - resolves WAITING commitments whose dependency just completed
-  - detects blockers (issue labeled 'blocked', or open >N with no PR)
+  - detects blockers (issue labeled 'blocked')
+  - detects missed deadlines (see deadlines.py) and flags them as blockers
+  - returns BLOCKED/ESCALATED commitments to IN_PROGRESS once unblocked
   - marks VERIFIED when the linked PR is merged
-  - proposes escalation actions (requires human approval before sending)
+
+It never sends anything. Escalation email is drafted by Murph and gated behind
+explicit human approval in the API layer — a polling loop firing email
+unattended is precisely what that gate exists to prevent.
 
 check_all_commitments() is async because resolving a dependency needs to
 call execute_commitment() (also async, since it may run the ADK agent).
 The background thread in main.py drives this with asyncio.run() each
 pass — see _monitoring_loop there.
 """
+import config
+import deadlines
+import pubsub_bus
 import store
 from tools.github_tool import get_issue_status
+
+
+def _announce(topic: str, cmt: dict, **extra):
+    """Publish a lifecycle event to Pub/Sub.
+
+    Nothing in this repo subscribes to task-blocked or task-verified yet — the
+    dashboard reads state directly. They are published anyway because they are
+    the seam a real deployment extends at (a Slack notifier, an analytics sink,
+    a Cloud Function) without touching this agent, and because a topic that is
+    created but never written to is a claim the architecture does not honour.
+    """
+    pubsub_bus.publish(topic, {
+        "commitment_id": cmt["id"],
+        "meeting_id": cmt.get("meeting_id"),
+        "description": cmt.get("description"),
+        "owner": cmt.get("owner"),
+        **extra,
+    })
 
 
 BLOCKED_LABEL = "blocked"
@@ -100,6 +126,7 @@ def _check_github_progress(cmt: dict):
             meeting_id=cmt["meeting_id"], commitment_id=cmt["id"],
             kind="blocker_detected", message="Blocker detected via GitHub label",
         )
+        _announce(config.TOPIC_TASK_BLOCKED, cmt, reason="github_label")
         return
 
     if not is_blocked_now and state in ("BLOCKED", "ESCALATED"):
@@ -114,9 +141,37 @@ def _check_github_progress(cmt: dict):
         )
         return
 
-    # Deadline-based escalation trigger left as an explicit, approvable
-    # action surfaced to the dashboard/voice layer rather than auto-firing
-    # emails from the polling loop.
+    _check_deadline(cmt)
+
+
+def _check_deadline(cmt: dict):
+    """Flag a commitment whose spoken deadline has passed.
+
+    This deliberately does not send anything. It marks the commitment BLOCKED
+    with an overdue reason, which surfaces it to the dashboard and to Murph as
+    something a human may want to escalate. Auto-firing email from a polling
+    loop would be exactly the unattended external action the approval gate
+    exists to prevent.
+    """
+    if cmt.get("state") != "IN_PROGRESS":
+        return
+
+    overdue = deadlines.days_overdue(cmt.get("deadline", ""))
+    if not overdue:  # None (unparseable) or 0 (not yet due)
+        return
+
+    day_word = "day" if overdue == 1 else "days"
+    store.update_commitment(
+        cmt["id"], state="BLOCKED",
+        blocked_reason=f"Deadline '{cmt['deadline']}' passed {overdue} {day_word} ago, no merged PR",
+    )
+    store.log_event(
+        meeting_id=cmt["meeting_id"], commitment_id=cmt["id"],
+        kind="deadline_missed",
+        message=f"Deadline missed by {overdue} {day_word}: {cmt['description']}",
+    )
+    _announce(config.TOPIC_TASK_BLOCKED, cmt, reason="deadline_missed",
+              days_overdue=overdue)
 
 
 def _verify(cmt: dict):
@@ -127,3 +182,4 @@ def _verify(cmt: dict):
         meeting_id=cmt["meeting_id"], commitment_id=cmt["id"],
         kind="verified", message="Commitment verified complete",
     )
+    _announce(config.TOPIC_TASK_VERIFIED, cmt)

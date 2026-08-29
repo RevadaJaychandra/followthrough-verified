@@ -46,6 +46,49 @@ def client() -> genai.Client:
     return _client
 
 
+def preflight_model() -> dict:
+    """Check at startup that config.GEMINI_MODEL actually exists and answers.
+
+    Google retires model IDs on a schedule. Without this check, a stale ID
+    surfaces as a 404 on the first real transcript upload — i.e. live, in
+    front of an audience, several layers down a stack trace. One tiny
+    generate_content call at boot turns that into a loud, obvious log line
+    with the fix in it.
+
+    Returns a dict with 'ok' and a human-readable 'message'. Never raises:
+    a failed preflight should warn, not prevent the server from starting,
+    since everything except extraction still works.
+    """
+    if config.OFFLINE_MODE:
+        return {"ok": True, "message": "offline mode, no model check needed"}
+
+    try:
+        client().models.generate_content(
+            model=config.GEMINI_MODEL,
+            contents="Reply with the single word: ok",
+            config=types.GenerateContentConfig(max_output_tokens=8, temperature=0),
+        )
+        return {"ok": True, "message": f"model '{config.GEMINI_MODEL}' reachable"}
+    except Exception as e:
+        detail = str(e)
+        hint = ""
+        if "404" in detail or "not found" in detail.lower():
+            hint = (
+                f" — '{config.GEMINI_MODEL}' does not exist for this project/region. "
+                "Set GEMINI_MODEL in .env to a current model id "
+                "(e.g. gemini-3.5-flash or gemini-3.7-flash) and check "
+                "https://cloud.google.com/vertex-ai/generative-ai/docs/models "
+                "for what is live today."
+            )
+        elif "403" in detail or "permission" in detail.lower():
+            hint = (
+                " — credentials reached Vertex AI but were refused. Check that "
+                "aiplatform.googleapis.com is enabled and that your account has "
+                "roles/aiplatform.user on this project."
+            )
+        return {"ok": False, "message": f"model preflight failed{hint} ({detail[:300]})"}
+
+
 EXTRACTION_PROMPT = """You are a meeting intelligence system. Read the transcript below and extract every concrete commitment made — a specific task someone agreed to do.
 
 For each commitment, identify:

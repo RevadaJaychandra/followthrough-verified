@@ -1,11 +1,16 @@
 """FollowThrough backend — FastAPI app.
 
 Endpoints:
-  POST /meetings                -> upload transcript, triggers extraction
-  GET  /commitments              -> list all commitments (for dashboard)
-  GET  /events                   -> list timeline events (for dashboard)
-  POST /murph                    -> voice/chat query endpoint
-  POST /commitments/{id}/label   -> manually add a github label (demo helper)
+  POST   /meetings                     -> upload transcript, triggers extraction
+  GET    /commitments                  -> list all commitments (for dashboard)
+  GET    /events                       -> list timeline events (for dashboard)
+  POST   /murph                        -> voice/chat query endpoint
+  GET    /escalations                  -> list drafted escalations + status
+  POST   /escalations/{id}/approve     -> human approves, then it sends
+  POST   /escalations/{id}/reject      -> human rejects, nothing sends
+  POST   /commitments/{id}/label       -> add a github label (demo helper)
+  DELETE /commitments/{id}/label/{lbl} -> remove a github label (demo helper)
+  POST   /commitments/{id}/mock-merge  -> OFFLINE_MODE only, simulate PR merge
 
 Async flow:
   1. POST /meetings -> Meeting Intelligence Agent extracts commitments,
@@ -26,17 +31,17 @@ from pydantic import BaseModel
 import config
 import store
 import pubsub_bus
-from agents.meeting_intel import extract_commitments
+from agents.meeting_intel import extract_commitments, preflight_model
 from agents.execution_agent import execute_commitment
 from agents.monitoring_agent import check_all_commitments
-from agents.murph_agent import ask_murph
+from agents.murph_agent import ask_murph, send_escalation
 from tools.github_tool import add_label, remove_label, mock_merge_pr
 
 app = FastAPI(title="FollowThrough API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten before any real deployment
+    allow_origins=config.CORS_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -56,6 +61,10 @@ class MurphQuery(BaseModel):
 
 class LabelRequest(BaseModel):
     label: str
+
+
+class ApprovalRequest(BaseModel):
+    approved_by: str | None = None
 
 
 # ---------- meetings ----------
@@ -108,6 +117,76 @@ async def murph_query(payload: MurphQuery):
     return result
 
 
+# ---------- escalation approval (human-in-the-loop gate) ----------
+#
+# Sending email on the team's behalf is irreversible and externally visible,
+# so it is the one action an agent may never take alone. Murph can draft an
+# escalation, but only these endpoints can approve one, and they are not
+# exposed to any agent as a tool. send_escalation() refuses anything that is
+# not already APPROVED, so the guarantee holds in state rather than in a prompt.
+
+@app.get("/escalations")
+def get_escalations(status: str | None = None):
+    return store.list_escalations(status)
+
+
+@app.post("/escalations/{escalation_id}/approve")
+def approve_escalation(escalation_id: str, payload: ApprovalRequest | None = None):
+    """Approve a drafted escalation and send it immediately."""
+    esc = store.get_escalation(escalation_id)
+    if not esc:
+        raise HTTPException(status_code=404, detail="escalation not found")
+    if esc["status"] == store.ESCALATION_SENT:
+        return {"status": "already_sent", "escalation": esc}
+    if esc["status"] != store.ESCALATION_PENDING:
+        raise HTTPException(
+            status_code=409,
+            detail=f"escalation is {esc['status']}, only {store.ESCALATION_PENDING} can be approved",
+        )
+
+    approved_by = (payload.approved_by if payload else None) or "dashboard-user"
+    store.update_escalation(
+        escalation_id,
+        status=store.ESCALATION_APPROVED,
+        approved_by=approved_by,
+        decided_at=store.now(),
+    )
+    store.log_event(
+        meeting_id=esc.get("meeting_id"), commitment_id=esc["commitment_id"],
+        kind="escalation_approved",
+        message=f"Escalation approved by {approved_by}",
+    )
+    send_result = send_escalation(escalation_id)
+    return {"status": send_result.get("status"), "escalation": store.get_escalation(escalation_id)}
+
+
+@app.post("/escalations/{escalation_id}/reject")
+def reject_escalation(escalation_id: str, payload: ApprovalRequest | None = None):
+    """Reject a drafted escalation. Nothing is sent, and it cannot be revived."""
+    esc = store.get_escalation(escalation_id)
+    if not esc:
+        raise HTTPException(status_code=404, detail="escalation not found")
+    if esc["status"] != store.ESCALATION_PENDING:
+        raise HTTPException(
+            status_code=409,
+            detail=f"escalation is {esc['status']}, only {store.ESCALATION_PENDING} can be rejected",
+        )
+
+    rejected_by = (payload.approved_by if payload else None) or "dashboard-user"
+    store.update_escalation(
+        escalation_id,
+        status=store.ESCALATION_REJECTED,
+        approved_by=rejected_by,
+        decided_at=store.now(),
+    )
+    store.log_event(
+        meeting_id=esc.get("meeting_id"), commitment_id=esc["commitment_id"],
+        kind="escalation_rejected",
+        message=f"Escalation rejected by {rejected_by}, nothing sent",
+    )
+    return {"status": "rejected", "escalation": store.get_escalation(escalation_id)}
+
+
 # ---------- demo helpers ----------
 
 @app.post("/commitments/{commitment_id}/label")
@@ -149,7 +228,15 @@ def mock_merge(commitment_id: str):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Liveness, plus the few facts the dashboard needs to render honestly —
+    chiefly whether it is looking at real GitHub/Gemini/Gmail or in-memory
+    stubs, so it never implies a real issue was filed when one was not."""
+    return {
+        "status": "ok",
+        "offline_mode": config.OFFLINE_MODE,
+        "github_repo": config.GITHUB_REPO if not config.OFFLINE_MODE else None,
+        "model": config.GEMINI_MODEL,
+    }
 
 
 # ---------- background wiring ----------
@@ -170,8 +257,35 @@ def _monitoring_loop(interval_seconds: int = 5):
         time.sleep(interval_seconds)
 
 
+def _startup_preflight():
+    """Fail loudly at boot rather than silently at demo time.
+
+    Every check here is non-fatal on purpose: a missing Gmail password should
+    not stop the server, it should print one obvious line saying escalation
+    email will not work. What must never happen is discovering a bad model id
+    or an unset GITHUB_REPO for the first time in front of an audience.
+    """
+    if config.OFFLINE_MODE:
+        print("[startup] OFFLINE_MODE=true — Gemini, Firestore, Pub/Sub, GitHub "
+              "and Gmail are all in-memory stubs. Nothing leaves this process.")
+        return
+
+    problems = config.validate()
+    if problems:
+        print("[startup] configuration problems:")
+        for p in problems:
+            print(f"[startup]   - {p}")
+    else:
+        print("[startup] config complete (all values present, none placeholders)")
+
+    result = preflight_model()
+    prefix = "[startup] " if result["ok"] else "[startup] WARNING: "
+    print(f"{prefix}{result['message']}")
+
+
 @app.on_event("startup")
 def startup():
+    _startup_preflight()
     pubsub_bus.ensure_topics_and_subscriptions()
     pubsub_bus.run_subscriber(config.TOPIC_MEETING_PROCESSED, _on_meeting_processed)
     threading.Thread(target=_monitoring_loop, daemon=True).start()

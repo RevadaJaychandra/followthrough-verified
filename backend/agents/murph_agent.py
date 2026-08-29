@@ -35,9 +35,9 @@ def list_commitment_status() -> dict:
 
 
 def propose_escalation(commitment_id: str, recipient_email: str, reason: str) -> dict:
-    """Prepare (but do NOT send) an escalation email for a blocked
-    commitment. This requires a separate human approval step — call this
-    to draft it, then tell the user you need their approval before sending.
+    """Draft an escalation email for a blocked commitment and put it in the
+    approval queue. This does NOT send anything. Tell the user the draft is
+    waiting for their approval in the dashboard.
 
     Args:
         commitment_id: The commitment that is blocked.
@@ -56,31 +56,87 @@ def propose_escalation(commitment_id: str, recipient_email: str, reason: str) ->
         f"Could you help unblock this? This request was sent automatically "
         f"by FollowThrough on behalf of the team.\n"
     )
+    escalation_id = store.create_escalation(
+        commitment_id=commitment_id,
+        meeting_id=cmt.get("meeting_id"),
+        recipient=recipient_email,
+        subject=subject,
+        body=body,
+        reason=reason,
+    )
     store.log_event(
         meeting_id=cmt["meeting_id"], commitment_id=commitment_id,
-        kind="escalation_drafted", message=f"Escalation drafted for {recipient_email}, awaiting approval",
+        kind="escalation_drafted",
+        message=f"Escalation drafted for {recipient_email}, awaiting human approval",
     )
     return {
         "status": "drafted_pending_approval",
+        "escalation_id": escalation_id,
         "subject": subject,
         "body": body,
         "recipient": recipient_email,
     }
 
 
-def send_approved_escalation(commitment_id: str, recipient_email: str,
-                              subject: str, body: str) -> dict:
-    """Actually send an escalation email. ONLY call this if the user has
-    explicitly approved sending it in this conversation."""
-    result = send_escalation_email(recipient_email, subject, body)
+def send_escalation(escalation_id: str) -> dict:
+    """Send an escalation email that a human has already approved.
+
+    This refuses to send anything that is not already in APPROVED status. You
+    cannot approve an escalation yourself and there is no tool that lets you —
+    approval only happens when a person clicks Approve in the dashboard. If
+    this returns not_approved, tell the user the draft is still waiting on
+    them; do not try to work around it.
+
+    Args:
+        escalation_id: The id returned by propose_escalation.
+    """
+    esc = store.get_escalation(escalation_id)
+    if not esc:
+        return {"status": "error", "message": "escalation not found"}
+
+    if esc["status"] == store.ESCALATION_SENT:
+        return {"status": "already_sent", "message": "this escalation was already sent"}
+
+    if esc["status"] != store.ESCALATION_APPROVED:
+        # The enforcement point. An agent reaching here without human approval
+        # gets nothing sent, regardless of what it believes the user said.
+        return {
+            "status": "not_approved",
+            "message": (
+                f"Escalation {escalation_id} is {esc['status']}, not APPROVED. "
+                "A human must approve it in the dashboard before it can be sent."
+            ),
+        }
+
+    result = send_escalation_email(esc["recipient"], esc["subject"], esc["body"])
     if result.get("status") == "success":
-        cmt = store.get_commitment(commitment_id)
-        store.update_commitment(commitment_id, state="ESCALATED")
+        store.update_escalation(escalation_id, status=store.ESCALATION_SENT)
+        store.update_commitment(esc["commitment_id"], state="ESCALATED")
         store.log_event(
-            meeting_id=cmt.get("meeting_id"), commitment_id=commitment_id,
-            kind="escalation_sent", message=f"Escalation sent to {recipient_email}",
+            meeting_id=esc.get("meeting_id"), commitment_id=esc["commitment_id"],
+            kind="escalation_sent", message=f"Escalation sent to {esc['recipient']}",
+        )
+    else:
+        store.update_escalation(escalation_id, status=store.ESCALATION_FAILED)
+        store.log_event(
+            meeting_id=esc.get("meeting_id"), commitment_id=esc["commitment_id"],
+            kind="escalation_failed",
+            message=f"Escalation send failed: {result.get('message')}",
         )
     return result
+
+
+def list_pending_escalations() -> dict:
+    """List escalation drafts that are still waiting for a human decision."""
+    pending = store.list_escalations(status=store.ESCALATION_PENDING)
+    return {
+        "status": "success",
+        "pending": [
+            {"escalation_id": e["id"], "recipient": e["recipient"],
+             "subject": e["subject"], "reason": e["reason"]}
+            for e in pending
+        ],
+    }
 
 
 murph_agent = Agent(
@@ -92,12 +148,16 @@ murph_agent = Agent(
         "questions about meeting commitments concisely and factually, "
         "using list_commitment_status to check current state — never "
         "guess. If asked to escalate or 'ask someone' about a blocked "
-        "task, call propose_escalation to draft the message and then ask "
-        "the user to confirm before it's sent — do NOT call "
-        "send_approved_escalation unless the user has explicitly said yes "
-        "in this conversation. Keep spoken responses short, 1-3 sentences."
+        "task, call propose_escalation to draft the message, then tell the "
+        "user it is waiting for their approval in the dashboard. Sending an "
+        "email is irreversible, so you cannot approve one yourself: "
+        "send_escalation only works on drafts a person has already approved, "
+        "and it will refuse otherwise. If it refuses, say the draft still "
+        "needs approval rather than trying another route. Keep spoken "
+        "responses short, 1-3 sentences."
     ),
-    tools=[list_commitment_status, propose_escalation, send_approved_escalation],
+    tools=[list_commitment_status, propose_escalation, send_escalation,
+           list_pending_escalations],
 )
 
 _runner = None
@@ -141,21 +201,27 @@ def _offline_ask_murph(query: str) -> str:
             recipient_email=config.ESCALATION_RECIPIENT or "teammate@example.com",
             reason=cmt.get("blocked_reason", "blocked"),
         )
-        return f"Drafted an escalation for '{cmt['description']}' to {draft['recipient']}. Say 'yes send it' to confirm."
-
-    if "yes" in q and ("send" in q or "confirm" in q):
-        cmts = list_commitment_status()["commitments"]
-        blocked = [c for c in cmts if c["state"] == "BLOCKED"]
-        if not blocked:
-            return "No pending escalation to send."
-        cmt = blocked[0]
-        result = send_approved_escalation(
-            commitment_id=cmt["id"],
-            recipient_email=config.ESCALATION_RECIPIENT or "teammate@example.com",
-            subject=f"[FollowThrough] Blocked: {cmt['description']}",
-            body=f"The commitment '{cmt['description']}' is blocked: {cmt.get('blocked_reason', '')}",
+        return (
+            f"Drafted an escalation for '{cmt['description']}' to {draft['recipient']}. "
+            "It's waiting for your approval in the dashboard — I can't send it myself."
         )
-        return "Escalation sent." if result.get("status") == "success" else f"Failed to send: {result.get('message')}"
+
+    if "send" in q or "confirm" in q or "approv" in q:
+        # Mirrors the real agent: try to send, and let the store's approval
+        # gate decide. Saying "yes send it" out loud is not approval.
+        pending = list_pending_escalations()["pending"]
+        approved = store.list_escalations(status=store.ESCALATION_APPROVED)
+        if approved:
+            result = send_escalation(approved[0]["id"])
+            if result.get("status") == "success":
+                return "Escalation sent."
+            return f"Failed to send: {result.get('message')}"
+        if pending:
+            return (
+                "That draft still needs approval — click Approve in the dashboard "
+                "and I'll send it. I can't approve it myself."
+            )
+        return "No pending escalation to send."
 
     return "I can tell you what's blocked, or help escalate a blocked task — try asking 'what's blocked?'"
 

@@ -13,17 +13,21 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types as genai_types
 
 import config
+import pubsub_bus
 import store
-from tools.github_tool import create_github_issue
+from tools.github_tool import create_github_issue, comment_on_issue
 
 
-def _github_username_guess(name: str) -> str:
-    # Best-effort: for the demo, we maintain a tiny name->github mapping.
-    # In a real system this would look up a directory/HRIS.
-    mapping = {
-        # "Kartikeya": "0kartik",
-    }
-    return mapping.get(name, "")
+def github_username_for(name: str) -> str:
+    """Map a speaker's name from the transcript to a GitHub username.
+
+    A real deployment would look this up in a directory or HRIS. For the demo
+    it reads GITHUB_USER_MAP from the environment, formatted as
+    "Kartikeya=0kartik,Rahul=rahul-dev". Returns "" when unknown, which makes
+    the issue unassigned rather than failing — assigning a nonexistent user
+    makes GitHub reject the whole create_issue call.
+    """
+    return config.GITHUB_USER_MAP.get(name.strip().lower(), "")
 
 
 execution_agent = Agent(
@@ -79,12 +83,22 @@ async def execute_commitment(commitment_id: str):
     if cmt.get("github_issue_number"):
         return  # already executed
 
+    # PLANNED: the dependency check passed and this commitment is cleared for
+    # execution, but no issue exists yet. It is a real, observable step — the
+    # dashboard rail shows it — and it is what distinguishes "not started
+    # because it is waiting" from "not started because issue creation failed".
+    if cmt.get("state") != "PLANNED":
+        store.update_commitment(commitment_id, state="PLANNED")
+
+    assignee = github_username_for(cmt["owner"])
+
     if config.OFFLINE_MODE:
         # Skip the LLM call (no credentials needed); call the same
         # (already offline-aware) tool function the agent would call.
         tool_result = create_github_issue(
             title=cmt["description"],
             body=f"Owner: {cmt['owner']}\nDeadline: {cmt['deadline']}\nCreated automatically by FollowThrough (offline mode).",
+            owner_github_username=assignee,
         )
     else:
         runner = _get_runner()
@@ -96,7 +110,9 @@ async def execute_commitment(commitment_id: str):
             f"Commitment: {cmt['description']}\n"
             f"Owner: {cmt['owner']}\n"
             f"Deadline: {cmt['deadline']}\n"
-            f"Create the GitHub issue now."
+            + (f"Assign to GitHub user: {assignee}\n" if assignee else
+               "The owner's GitHub username is unknown; leave it unassigned.\n")
+            + "Create the GitHub issue now."
         )
 
         tool_result = None
@@ -125,6 +141,21 @@ async def execute_commitment(commitment_id: str):
             kind="github_issue_created",
             message=f"GitHub issue #{tool_result['issue_number']} created",
         )
+        # Announce on the issue itself, so the trail is visible to someone who
+        # only ever looks at GitHub and never opens this dashboard.
+        comment_on_issue(
+            tool_result["issue_number"],
+            f"Tracked by FollowThrough. Committed by **{cmt['owner']}** in a meeting, "
+            f"deadline: **{cmt['deadline']}**.\n\n"
+            "Add the `blocked` label if this is stuck — FollowThrough will pick it up "
+            "and offer to escalate. Reference this issue in a PR and it will be marked "
+            "verified once that PR merges.",
+        )
+        pubsub_bus.publish(config.TOPIC_TASK_CREATED, {
+            "commitment_id": commitment_id,
+            "meeting_id": cmt["meeting_id"],
+            "issue_number": tool_result["issue_number"],
+        })
     else:
         store.log_event(
             meeting_id=cmt["meeting_id"],

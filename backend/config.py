@@ -24,6 +24,27 @@ TOPIC_TASK_VERIFIED = os.getenv("PUBSUB_TOPIC_TASK_VERIFIED", "task-verified")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "")
 
+
+def _parse_user_map(raw: str) -> dict[str, str]:
+    """Parse "Kartikeya=0kartik,Rahul=rahul-dev" into a lookup keyed by
+    lowercased speaker name. Malformed entries are skipped rather than
+    raising, so one typo in .env cannot stop the server from booting."""
+    mapping = {}
+    for pair in raw.split(","):
+        if "=" not in pair:
+            continue
+        name, username = pair.split("=", 1)
+        name, username = name.strip().lower(), username.strip()
+        if name and username:
+            mapping[name] = username
+    return mapping
+
+
+# Maps transcript speaker names to GitHub usernames so created issues get
+# assigned to a real person. Unmapped names produce an unassigned issue —
+# GitHub rejects create_issue outright if an assignee does not exist.
+GITHUB_USER_MAP = _parse_user_map(os.getenv("GITHUB_USER_MAP", ""))
+
 GMAIL_SENDER = os.getenv("GMAIL_SENDER", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
 ESCALATION_RECIPIENT = os.getenv("ESCALATION_RECIPIENT", "")
@@ -33,6 +54,18 @@ ESCALATION_RECIPIENT = os.getenv("ESCALATION_RECIPIENT", "")
 # calling out. Lets you test the full request/response wiring and the
 # frontend before any real credentials exist.
 OFFLINE_MODE = os.getenv("OFFLINE_MODE", "false").lower() == "true"
+
+# Browser origins allowed to call this API. Defaults to the local Vite dev
+# server. Set CORS_ALLOWED_ORIGINS to a comma-separated list (or to "*") once
+# the dashboard is deployed somewhere. The previous hardcoded "*" meant any
+# website a judge happened to have open could drive this API, including the
+# escalation-approval endpoints.
+CORS_ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",") if o.strip()
+]
 
 ALL_TOPICS = [
     TOPIC_MEETING_PROCESSED,
@@ -72,6 +105,8 @@ def validate(require_github=True, require_gmail=True, require_gcp=True) -> list[
             problems.append("GMAIL_SENDER is missing or still the placeholder value.")
         if not GMAIL_APP_PASSWORD or _looks_like_placeholder(GMAIL_APP_PASSWORD):
             problems.append("GMAIL_APP_PASSWORD is missing or still the placeholder value — generate one at https://myaccount.google.com/apppasswords.")
+        if not ESCALATION_RECIPIENT or _looks_like_placeholder(ESCALATION_RECIPIENT):
+            problems.append("ESCALATION_RECIPIENT is missing or still the placeholder value — set it to an inbox you can check during the demo.")
 
     return problems
 
@@ -81,9 +116,17 @@ if __name__ == "__main__":
     problems = validate()
     if not problems:
         print("Config looks complete (values present, not placeholders).")
-        print(f"  GCP_PROJECT_ID = {GCP_PROJECT_ID}")
-        print(f"  GITHUB_REPO    = {GITHUB_REPO}")
-        print(f"  OFFLINE_MODE   = {OFFLINE_MODE}")
+        print(f"  GCP_PROJECT_ID       = {GCP_PROJECT_ID}")
+        print(f"  GCP_REGION           = {GCP_REGION}")
+        print(f"  GEMINI_MODEL         = {GEMINI_MODEL}")
+        print(f"  GITHUB_REPO          = {GITHUB_REPO}")
+        print(f"  ESCALATION_RECIPIENT = {ESCALATION_RECIPIENT}")
+        print(f"  GITHUB_USER_MAP      = {GITHUB_USER_MAP or '(none — issues will be unassigned)'}")
+        print(f"  CORS_ALLOWED_ORIGINS = {', '.join(CORS_ALLOWED_ORIGINS)}")
+        print(f"  OFFLINE_MODE         = {OFFLINE_MODE}")
+        print()
+        print("Secrets are present but not printed. Nothing here made a network call —")
+        print("start the server to see the Gemini model preflight result.")
     else:
         print("Config problems found:")
         for p in problems:

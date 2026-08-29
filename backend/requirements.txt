@@ -1,9 +1,19 @@
-google-adk
-google-cloud-aiplatform
-google-cloud-firestore
-google-cloud-pubsub
-fastapi
-uvicorn[standard]
-python-dotenv
-PyGithub
-pydantic
+# Pinned to the versions this project was built and tested against.
+#
+# Unpinned, a breaking upstream release during the hackathon would take the
+# demo down with no warning and no obvious cause. Compatible-release pins
+# (~=) still allow patch fixes while holding the minor version steady.
+#
+# Verified working together on 2026-08-30 (see docs/01-PHASE-1-PROVE-IT.md).
+
+google-adk~=2.8.0
+google-genai~=2.20.0          # imported directly by agents/meeting_intel.py;
+                              # previously only present transitively via ADK
+google-cloud-aiplatform~=2.0.1
+google-cloud-firestore~=2.29.0
+google-cloud-pubsub~=2.39.2
+fastapi~=0.141.1
+uvicorn[standard]~=0.52.4
+python-dotenv~=1.2.3
+PyGithub~=2.10.0
+pydantic~=2.13.5

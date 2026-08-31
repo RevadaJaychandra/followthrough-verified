@@ -17,7 +17,7 @@ def send_escalation_email(recipient: str, subject: str, body: str) -> dict:
         subject: Email subject line.
         body: Email body text.
     """
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_GMAIL:
         print(f"[offline] would send email to {recipient}: {subject}")
         return {"status": "success", "offline": True}
 

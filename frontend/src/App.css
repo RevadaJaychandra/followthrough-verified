@@ -637,3 +637,11 @@
   border-color: var(--state-progress);
   color: var(--state-progress);
 }
+
+/* Says what is actually live, so a partially-real run is not mistaken for
+   either a fully stubbed one or a fully deployed one. */
+.summary-chip--live {
+  border-color: var(--state-completed);
+  color: var(--state-completed);
+  letter-spacing: 0.06em;
+}

@@ -55,6 +55,48 @@ ESCALATION_RECIPIENT = os.getenv("ESCALATION_RECIPIENT", "")
 # frontend before any real credentials exist.
 OFFLINE_MODE = os.getenv("OFFLINE_MODE", "false").lower() == "true"
 
+
+def _offline_flag(name: str) -> bool:
+    """Per-service offline switch, defaulting to the master OFFLINE_MODE.
+
+    OFFLINE_MODE alone is all-or-nothing, which forces a choice nobody wants:
+    either everything is stubbed, or you need a GCP project with billing linked
+    before you can create a single real GitHub issue. These flags let the
+    expensive-to-set-up services (Firestore, Pub/Sub) stay in-memory while the
+    ones that matter for a demo (GitHub, Gemini, Gmail) are real.
+
+    Example .env for that configuration:
+        OFFLINE_MODE=true
+        OFFLINE_GITHUB=false
+        OFFLINE_GMAIL=false
+        OFFLINE_LLM=false
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return OFFLINE_MODE
+    return raw.strip().lower() == "true"
+
+
+OFFLINE_STORE = _offline_flag("OFFLINE_STORE")     # Firestore
+OFFLINE_PUBSUB = _offline_flag("OFFLINE_PUBSUB")   # Pub/Sub
+OFFLINE_GITHUB = _offline_flag("OFFLINE_GITHUB")   # GitHub issues/PRs
+OFFLINE_GMAIL = _offline_flag("OFFLINE_GMAIL")     # escalation email
+OFFLINE_LLM = _offline_flag("OFFLINE_LLM")         # Gemini + ADK agents
+
+# True only when every single service is stubbed. The dashboard shows its
+# OFFLINE chip based on this, so a partially-real run is not labelled as fake.
+FULLY_OFFLINE = all([OFFLINE_STORE, OFFLINE_PUBSUB, OFFLINE_GITHUB,
+                     OFFLINE_GMAIL, OFFLINE_LLM])
+
+
+def live_services() -> list[str]:
+    """Names of the services making real network calls, for startup logging."""
+    return [name for name, offline in (
+        ("Firestore", OFFLINE_STORE), ("Pub/Sub", OFFLINE_PUBSUB),
+        ("GitHub", OFFLINE_GITHUB), ("Gmail", OFFLINE_GMAIL),
+        ("Gemini", OFFLINE_LLM),
+    ) if not offline]
+
 # Browser origins allowed to call this API. Defaults to the local Vite dev
 # server. Set CORS_ALLOWED_ORIGINS to a comma-separated list (or to "*") once
 # the dashboard is deployed somewhere. The previous hardcoded "*" meant any
@@ -85,10 +127,24 @@ def _looks_like_placeholder(value: str) -> bool:
     return any(marker in v for marker in _PLACEHOLDER_MARKERS)
 
 
-def validate(require_github=True, require_gmail=True, require_gcp=True) -> list[str]:
+def validate(require_github=None, require_gmail=None, require_gcp=None) -> list[str]:
     """Returns a list of human-readable problems with current config.
-    Empty list means config looks usable. Does not make any network calls."""
+    Empty list means config looks usable. Does not make any network calls.
+
+    Each requirement defaults to "needed only if that service is actually
+    live", so a run with real GitHub but an in-memory Firestore is not nagged
+    about a missing GCP_PROJECT_ID it will never use.
+    """
     problems = []
+
+    if require_github is None:
+        require_github = not OFFLINE_GITHUB
+    if require_gmail is None:
+        require_gmail = not OFFLINE_GMAIL
+    if require_gcp is None:
+        # Vertex needs a project; the AI Studio key path does not.
+        needs_vertex = not OFFLINE_LLM and not os.getenv("GEMINI_API_KEY", "")
+        require_gcp = not OFFLINE_STORE or not OFFLINE_PUBSUB or needs_vertex
 
     if require_gcp:
         if not GCP_PROJECT_ID:
@@ -123,7 +179,11 @@ if __name__ == "__main__":
         print(f"  ESCALATION_RECIPIENT = {ESCALATION_RECIPIENT}")
         print(f"  GITHUB_USER_MAP      = {GITHUB_USER_MAP or '(none — issues will be unassigned)'}")
         print(f"  CORS_ALLOWED_ORIGINS = {', '.join(CORS_ALLOWED_ORIGINS)}")
-        print(f"  OFFLINE_MODE         = {OFFLINE_MODE}")
+        live = live_services()
+        print(f"  LIVE services        = {', '.join(live) if live else '(none — fully offline)'}")
+        stubbed = [s for s in ("Firestore", "Pub/Sub", "GitHub", "Gmail", "Gemini")
+                   if s not in live]
+        print(f"  stubbed (in-memory)  = {', '.join(stubbed) if stubbed else '(none — fully live)'}")
         print()
         print("Secrets are present but not printed. Nothing here made a network call —")
         print("start the server to see the Gemini model preflight result.")

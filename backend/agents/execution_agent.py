@@ -92,7 +92,7 @@ async def execute_commitment(commitment_id: str):
 
     assignee = github_username_for(cmt["owner"])
 
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_LLM:
         # Skip the LLM call (no credentials needed); call the same
         # (already offline-aware) tool function the agent would call.
         tool_result = create_github_issue(

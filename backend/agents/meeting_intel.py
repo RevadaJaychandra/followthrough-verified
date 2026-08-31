@@ -15,7 +15,7 @@ by default. If GEMINI_API_KEY is set instead, uses the plain Gemini API
 key path — useful if a teammate wants to test this file alone before
 full GCP IAM is wired up (get a key at https://aistudio.google.com/apikey).
 
-If config.OFFLINE_MODE is set, no network call is made at all — a small
+If config.OFFLINE_LLM is set, no network call is made at all — a small
 rule-based extractor handles the bundled sample transcript so the full
 pipeline (extraction -> Firestore -> Pub/Sub -> GitHub -> dashboard) can
 be exercised with zero credentials.
@@ -59,7 +59,7 @@ def preflight_model() -> dict:
     a failed preflight should warn, not prevent the server from starting,
     since everything except extraction still works.
     """
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_LLM:
         return {"ok": True, "message": "offline mode, no model check needed"}
 
     try:
@@ -143,7 +143,7 @@ def _offline_extract(transcript: str) -> list[dict]:
 
 
 def extract_commitments(transcript: str) -> list[dict]:
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_LLM:
         return _offline_extract(transcript)
 
     prompt = EXTRACTION_PROMPT.replace("{transcript}", transcript)

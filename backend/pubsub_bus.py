@@ -9,7 +9,7 @@ A push subscription -> Cloud Run endpoint is the "production" version;
 noted in the architecture diagram as the deploy target, pull is used
 locally/in-demo to avoid needing a public HTTPS endpoint during dev.
 
-When config.OFFLINE_MODE is true, real Pub/Sub is never touched — an
+When config.OFFLINE_PUBSUB is true, real Pub/Sub is never touched — an
 in-memory queue + handler dispatch simulates the same publish/subscribe
 behavior (including the async decoupling) so the full pipeline can be
 tested with zero GCP credentials. Swap OFFLINE_MODE off and the exact
@@ -64,7 +64,7 @@ def subscription_path(topic_name: str) -> str:
 
 def ensure_topics_and_subscriptions():
     """Idempotent setup — create topics + pull subscriptions if missing."""
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_PUBSUB:
         for topic_name in config.ALL_TOPICS:
             _mem_queue(topic_name)  # just ensures it exists
         print("[pubsub][offline] in-memory queues ready")
@@ -87,7 +87,7 @@ def ensure_topics_and_subscriptions():
 
 
 def publish(topic_name: str, payload: dict):
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_PUBSUB:
         _mem_queue(topic_name).put(payload)
         print(f"[pubsub][offline] published to {topic_name}: {payload}")
         return
@@ -103,7 +103,7 @@ def run_subscriber(topic_name: str, handler):
 
     handler: callable(payload: dict) -> None
     """
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_PUBSUB:
         def _mem_loop():
             q = _mem_queue(topic_name)
             print(f"[pubsub][offline] listening on {topic_name}")

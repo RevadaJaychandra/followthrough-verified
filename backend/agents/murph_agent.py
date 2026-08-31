@@ -227,7 +227,7 @@ def _offline_ask_murph(query: str) -> str:
 
 
 async def ask_murph(query: str, session_id: str | None = None) -> dict:
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_LLM:
         return {"reply": _offline_ask_murph(query), "session_id": session_id or "offline-session"}
 
     runner = _get_runner()

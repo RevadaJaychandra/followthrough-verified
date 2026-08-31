@@ -78,6 +78,17 @@ export default function App() {
               OFFLINE
             </span>
           )}
+          {/* State what is actually real, rather than letting a viewer assume.
+              A partially-live run is the honest common case: real GitHub and
+              Gemini, in-memory Firestore. */}
+          {!health?.offline_mode && health?.live_services?.length > 0 && (
+            <span
+              className="summary-chip summary-chip--live"
+              title={`Real API calls: ${health.live_services.join(', ')}`}
+            >
+              LIVE: {health.live_services.join(' · ')}
+            </span>
+          )}
           <button
             className={`app-header__demo ${showDemoControls ? 'is-on' : ''}`}
             onClick={() => setShowDemoControls((s) => !s)}

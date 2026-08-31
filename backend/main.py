@@ -217,8 +217,12 @@ def mock_merge(commitment_id: str):
     verification path can be exercised without a real GitHub repo.
     In real mode, merge the actual PR on GitHub instead — the monitoring
     loop will detect it on its next pass."""
-    if not config.OFFLINE_MODE:
-        raise HTTPException(status_code=400, detail="mock-merge is only available in OFFLINE_MODE")
+    if not config.OFFLINE_GITHUB:
+        raise HTTPException(
+            status_code=400,
+            detail="mock-merge only works against the in-memory GitHub stub; "
+                   "with real GitHub, merge the PR on GitHub instead",
+        )
     cmt = store.get_commitment(commitment_id)
     if not cmt or not cmt.get("github_issue_number"):
         raise HTTPException(status_code=404, detail="commitment or issue not found")
@@ -233,9 +237,20 @@ def health():
     stubs, so it never implies a real issue was filed when one was not."""
     return {
         "status": "ok",
-        "offline_mode": config.OFFLINE_MODE,
-        "github_repo": config.GITHUB_REPO if not config.OFFLINE_MODE else None,
-        "model": config.GEMINI_MODEL,
+        # Only true when every service is stubbed. A partially-real run must
+        # not be labelled fake, and a run with real GitHub must not be
+        # labelled fully live.
+        "offline_mode": config.FULLY_OFFLINE,
+        "live_services": config.live_services(),
+        "offline_services": {
+            "firestore": config.OFFLINE_STORE,
+            "pubsub": config.OFFLINE_PUBSUB,
+            "github": config.OFFLINE_GITHUB,
+            "gmail": config.OFFLINE_GMAIL,
+            "gemini": config.OFFLINE_LLM,
+        },
+        "github_repo": config.GITHUB_REPO if not config.OFFLINE_GITHUB else None,
+        "model": config.GEMINI_MODEL if not config.OFFLINE_LLM else None,
     }
 
 
@@ -265,10 +280,17 @@ def _startup_preflight():
     email will not work. What must never happen is discovering a bad model id
     or an unset GITHUB_REPO for the first time in front of an audience.
     """
-    if config.OFFLINE_MODE:
-        print("[startup] OFFLINE_MODE=true — Gemini, Firestore, Pub/Sub, GitHub "
-              "and Gmail are all in-memory stubs. Nothing leaves this process.")
+    live = config.live_services()
+    if not live:
+        print("[startup] fully offline — Gemini, Firestore, Pub/Sub, GitHub and "
+              "Gmail are all in-memory stubs. Nothing leaves this process.")
         return
+
+    stubbed = [s for s in ("Firestore", "Pub/Sub", "GitHub", "Gmail", "Gemini")
+               if s not in live]
+    print(f"[startup] LIVE: {', '.join(live)}")
+    if stubbed:
+        print(f"[startup] stubbed (in-memory): {', '.join(stubbed)}")
 
     problems = config.validate()
     if problems:

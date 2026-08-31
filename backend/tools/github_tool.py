@@ -4,7 +4,7 @@ Each function is a plain Python function with a docstring — ADK wraps
 these automatically as callable tools for an LlmAgent based on the
 signature + docstring.
 
-When config.OFFLINE_MODE is true, these functions never call the real
+When config.OFFLINE_GITHUB is true, these functions never call the real
 GitHub API — they simulate issue creation/state in memory so the rest
 of the app (extraction -> execution -> monitoring -> dashboard) can be
 tested end-to-end before a real GITHUB_TOKEN exists.
@@ -16,7 +16,7 @@ import config
 
 _gh_client = None
 
-# ---------- offline/mock state (only used when config.OFFLINE_MODE) ----------
+# ---------- offline/mock state (only used when config.OFFLINE_GITHUB) ----------
 _mock_issues: dict[int, dict] = {}
 _mock_issue_counter = itertools.count(1)
 
@@ -44,7 +44,7 @@ def create_github_issue(title: str, body: str, owner_github_username: str = "") 
     Returns:
         dict with status, issue_number, and issue_url.
     """
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_GITHUB:
         n = next(_mock_issue_counter)
         _mock_issues[n] = {
             "number": n, "title": title, "body": body,
@@ -76,7 +76,7 @@ def get_issue_status(issue_number: int) -> dict:
         dict with state, labels, and pr_status (none/open/merged) if a
         linked PR is found by convention (PR title/body references the issue).
     """
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_GITHUB:
         issue = _mock_issues.get(issue_number)
         if not issue:
             return {"status": "error", "message": "mock issue not found"}
@@ -125,7 +125,7 @@ def add_label(issue_number: int, label: str) -> dict:
         label: Label name to add. Will be created on the repo if it
             doesn't already exist.
     """
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_GITHUB:
         issue = _mock_issues.get(issue_number)
         if not issue:
             return {"status": "error", "message": "mock issue not found"}
@@ -155,7 +155,7 @@ def remove_label(issue_number: int, label: str) -> dict:
         label: Label name to remove. Removing a label that is not present
             is treated as success, so this is safe to call repeatedly.
     """
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_GITHUB:
         issue = _mock_issues.get(issue_number)
         if not issue:
             return {"status": "error", "message": "mock issue not found"}
@@ -179,7 +179,7 @@ def comment_on_issue(issue_number: int, comment: str) -> dict:
         issue_number: The GitHub issue number.
         comment: The comment text to post.
     """
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_GITHUB:
         return {"status": "success"}
 
     try:
@@ -194,7 +194,7 @@ def comment_on_issue(issue_number: int, comment: str) -> dict:
 def mock_merge_pr(issue_number: int) -> dict:
     """OFFLINE MODE ONLY: simulate a PR merge for a mock issue, so the
     monitoring/verification flow can be tested without real GitHub."""
-    if not config.OFFLINE_MODE:
+    if not config.OFFLINE_GITHUB:
         return {"status": "error", "message": "only available in OFFLINE_MODE"}
     issue = _mock_issues.get(issue_number)
     if not issue:

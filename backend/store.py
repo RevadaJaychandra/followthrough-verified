@@ -2,8 +2,8 @@
 
 Two backends behind the same functions:
   - Firestore (default) — real persistent state, used whenever
-    config.OFFLINE_MODE is false.
-  - In-memory dicts — used when config.OFFLINE_MODE is true, so the
+    config.OFFLINE_STORE is false.
+  - In-memory dicts — used when config.OFFLINE_STORE is true, so the
     whole app can be run and tested with zero GCP credentials.
 
 Collections / equivalent in-memory tables:
@@ -64,7 +64,7 @@ def save_meeting(transcript: str, title: str = "Untitled meeting") -> str:
         "transcript": transcript,
         "created_at": _now(),
     }
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_STORE:
         _mem_meetings[meeting_id] = doc
     else:
         db().collection("meetings").document(meeting_id).set(doc)
@@ -91,7 +91,7 @@ def create_commitment(meeting_id: str, description: str, owner: str,
         "created_at": _now(),
         "updated_at": _now(),
     }
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_STORE:
         _mem_commitments[commitment_id] = doc
     else:
         db().collection("commitments").document(commitment_id).set(doc)
@@ -102,7 +102,7 @@ def create_commitment(meeting_id: str, description: str, owner: str,
 
 def update_commitment(commitment_id: str, **fields):
     fields["updated_at"] = _now()
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_STORE:
         if commitment_id in _mem_commitments:
             _mem_commitments[commitment_id].update(fields)
     else:
@@ -114,14 +114,14 @@ def update_commitment(commitment_id: str, **fields):
 
 
 def get_commitment(commitment_id: str) -> dict:
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_STORE:
         return dict(_mem_commitments.get(commitment_id, {}))
     doc = db().collection("commitments").document(commitment_id).get()
     return doc.to_dict() if doc.exists else {}
 
 
 def list_commitments(meeting_id: str | None = None) -> list[dict]:
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_STORE:
         items = list(_mem_commitments.values())
         if meeting_id:
             items = [c for c in items if c["meeting_id"] == meeting_id]
@@ -170,7 +170,7 @@ def create_escalation(commitment_id: str, meeting_id: str | None, recipient: str
         "created_at": _now(),
         "decided_at": None,
     }
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_STORE:
         _mem_escalations[escalation_id] = doc
     else:
         db().collection("escalations").document(escalation_id).set(doc)
@@ -178,14 +178,14 @@ def create_escalation(commitment_id: str, meeting_id: str | None, recipient: str
 
 
 def get_escalation(escalation_id: str) -> dict:
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_STORE:
         return dict(_mem_escalations.get(escalation_id, {}))
     doc = db().collection("escalations").document(escalation_id).get()
     return doc.to_dict() if doc.exists else {}
 
 
 def update_escalation(escalation_id: str, **fields):
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_STORE:
         if escalation_id in _mem_escalations:
             _mem_escalations[escalation_id].update(fields)
     else:
@@ -193,7 +193,7 @@ def update_escalation(escalation_id: str, **fields):
 
 
 def list_escalations(status: str | None = None) -> list[dict]:
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_STORE:
         items = [dict(e) for e in _mem_escalations.values()]
     else:
         from google.cloud import firestore
@@ -219,14 +219,14 @@ def log_event(kind: str, message: str, meeting_id: str | None = None,
         "message": message,
         "timestamp": _now(),
     }
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_STORE:
         _mem_events.append(doc)
     else:
         db().collection("events").document(event_id).set(doc)
 
 
 def list_events(meeting_id: str | None = None, limit: int = 100) -> list[dict]:
-    if config.OFFLINE_MODE:
+    if config.OFFLINE_STORE:
         items = sorted(_mem_events, key=lambda e: e["timestamp"], reverse=True)
         if meeting_id:
             items = [e for e in items if e.get("meeting_id") == meeting_id]

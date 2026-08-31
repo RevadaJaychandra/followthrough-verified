@@ -18,6 +18,8 @@ call execute_commitment() (also async, since it may run the ADK agent).
 The background thread in main.py drives this with asyncio.run() each
 pass — see _monitoring_loop there.
 """
+import datetime
+
 import config
 import deadlines
 import pubsub_bus
@@ -53,6 +55,26 @@ BLOCKED_LABEL = "blocked"
 # forever.
 ACTIVE_STATES = ("IN_PROGRESS", "BLOCKED", "ESCALATED")
 
+# How long a commitment may sit at PLANNED before we assume issue creation
+# failed and retry it. Must comfortably exceed a slow ADK round trip: the
+# monitoring loop ticks every 5s, and a live agent call can take longer than
+# that, so a shorter window retries work that is still running and produces
+# duplicate GitHub issues.
+PLANNED_RETRY_AFTER_SECONDS = 90
+
+
+def _stale_for(cmt: dict, seconds: int) -> bool:
+    """True if the commitment has not been touched for at least `seconds`."""
+    updated = cmt.get("updated_at")
+    if updated is None:
+        return True
+    try:
+        age = (datetime.datetime.now(datetime.timezone.utc) - updated).total_seconds()
+    except TypeError:
+        # A naive datetime from some store backends; treat it as UTC.
+        age = (datetime.datetime.utcnow() - updated).total_seconds()
+    return age >= seconds
+
 
 async def check_all_commitments():
     """One monitoring pass over all non-terminal commitments.
@@ -76,6 +98,24 @@ async def check_all_commitments():
     for cmt in commitments:
         if cmt.get("state") == "WAITING":
             await _check_dependency(cmt, by_description)
+
+    # Third phase: rescue anything stranded. A commitment sits at PLANNED only
+    # between "cleared to run" and "issue created", so finding one here means
+    # issue creation failed — most likely Gemini answering 503 under load.
+    # Without this the commitment stays PLANNED forever and every task
+    # depending on it waits behind a step that will never happen again.
+    from agents.execution_agent import execute_commitment
+    for cmt in store.list_commitments():
+        if cmt.get("state") != "PLANNED" or cmt.get("github_issue_number"):
+            continue
+        if not _stale_for(cmt, PLANNED_RETRY_AFTER_SECONDS):
+            continue  # still plausibly in flight; retrying now would duplicate
+        store.log_event(
+            meeting_id=cmt.get("meeting_id"), commitment_id=cmt["id"],
+            kind="execution_retried",
+            message="Issue creation did not complete, retrying",
+        )
+        await execute_commitment(cmt["id"])
 
 
 async def _check_dependency(cmt: dict, by_description: dict):

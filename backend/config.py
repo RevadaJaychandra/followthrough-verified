@@ -16,6 +16,21 @@ GCP_REGION = os.getenv("GCP_REGION", "us-central1")
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 
+# Per-agent model overrides, defaulting to GEMINI_MODEL.
+#
+# The AI Studio free tier meters requests per day *per model*
+# (GenerateRequestsPerDayPerProjectPerModel-FreeTier), so pointing the three
+# agents at three different models gives each its own budget instead of all
+# three draining one. That matters here because the Execution Agent is a
+# multi-turn tool-calling loop and burns several requests per commitment,
+# while extraction is a single call whose output quality is worth more.
+#
+# Set them equal (or just leave them unset) on a paid tier, where this
+# workaround stops being necessary.
+GEMINI_MODEL_EXTRACTION = os.getenv("GEMINI_MODEL_EXTRACTION", GEMINI_MODEL)
+GEMINI_MODEL_EXECUTION = os.getenv("GEMINI_MODEL_EXECUTION", GEMINI_MODEL)
+GEMINI_MODEL_MURPH = os.getenv("GEMINI_MODEL_MURPH", GEMINI_MODEL)
+
 TOPIC_MEETING_PROCESSED = os.getenv("PUBSUB_TOPIC_MEETING_PROCESSED", "meeting-processed")
 TOPIC_TASK_CREATED = os.getenv("PUBSUB_TOPIC_TASK_CREATED", "task-created")
 TOPIC_TASK_BLOCKED = os.getenv("PUBSUB_TOPIC_TASK_BLOCKED", "task-blocked")
@@ -44,6 +59,11 @@ def _parse_user_map(raw: str) -> dict[str, str]:
 # assigned to a real person. Unmapped names produce an unassigned issue —
 # GitHub rejects create_issue outright if an assignee does not exist.
 GITHUB_USER_MAP = _parse_user_map(os.getenv("GITHUB_USER_MAP", ""))
+
+# Maps a commitment owner's name to their real email address, so an escalation
+# reaches an actual person. Format: "Kartikeya=k@team.com,Rahul=r@team.com".
+# Anyone not listed falls back to ESCALATION_RECIPIENT.
+TEAM_EMAIL_MAP = _parse_user_map(os.getenv("TEAM_EMAIL_MAP", ""))
 
 GMAIL_SENDER = os.getenv("GMAIL_SENDER", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")

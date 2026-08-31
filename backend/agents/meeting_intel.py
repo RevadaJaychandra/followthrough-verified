@@ -27,6 +27,7 @@ from google import genai
 from google.genai import types
 
 import config
+import llm_retry
 
 _client = None
 
@@ -47,7 +48,7 @@ def client() -> genai.Client:
 
 
 def preflight_model() -> dict:
-    """Check at startup that config.GEMINI_MODEL actually exists and answers.
+    """Check at startup that the extraction model actually exists and answers.
 
     Google retires model IDs on a schedule. Without this check, a stale ID
     surfaces as a 404 on the first real transcript upload — i.e. live, in
@@ -64,17 +65,17 @@ def preflight_model() -> dict:
 
     try:
         client().models.generate_content(
-            model=config.GEMINI_MODEL,
+            model=config.GEMINI_MODEL_EXTRACTION,
             contents="Reply with the single word: ok",
             config=types.GenerateContentConfig(max_output_tokens=8, temperature=0),
         )
-        return {"ok": True, "message": f"model '{config.GEMINI_MODEL}' reachable"}
+        return {"ok": True, "message": f"model '{config.GEMINI_MODEL_EXTRACTION}' reachable"}
     except Exception as e:
         detail = str(e)
         hint = ""
         if "404" in detail or "not found" in detail.lower():
             hint = (
-                f" — '{config.GEMINI_MODEL}' does not exist for this project/region. "
+                f" — '{config.GEMINI_MODEL_EXTRACTION}' does not exist for this project/region. "
                 "Set GEMINI_MODEL in .env to a current model id "
                 "(e.g. gemini-3.5-flash or gemini-3.7-flash) and check "
                 "https://cloud.google.com/vertex-ai/generative-ai/docs/models "
@@ -148,13 +149,16 @@ def extract_commitments(transcript: str) -> list[dict]:
 
     prompt = EXTRACTION_PROMPT.replace("{transcript}", transcript)
 
-    response = client().models.generate_content(
-        model=config.GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0.1,
-            response_mime_type="application/json",
+    response = llm_retry.with_retry(
+        lambda: client().models.generate_content(
+            model=config.GEMINI_MODEL_EXTRACTION,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                response_mime_type="application/json",
+            ),
         ),
+        label="extraction",
     )
 
     text = response.text.strip()

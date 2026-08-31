@@ -10,6 +10,7 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types as genai_types
 
 import config
+import llm_retry
 import store
 from tools.email_tool import send_escalation_email
 
@@ -34,6 +35,38 @@ def list_commitment_status() -> dict:
     }
 
 
+# Domains a model reaches for when it does not actually know an address.
+# An escalation sent to one of these silently goes nowhere, which is worse
+# than not sending it at all — the human believes the ask was delivered.
+_PLACEHOLDER_EMAIL_DOMAINS = ("example.com", "example.org", "example.net",
+                              "test.com", "email.com", "domain.com")
+
+
+def resolve_recipient(owner: str, suggested: str | None) -> tuple[str, str]:
+    """Decide where an escalation actually goes.
+
+    Returns (address, how_it_was_chosen).
+
+    An LLM asked to escalate to "Kartikeya" will confidently produce
+    kartikeya@example.com, because the transcript never contained an address.
+    Trusting that means the demo approves an email that is delivered nowhere.
+    So a model-supplied address is only used when it is plausibly real; the
+    authority is TEAM_EMAIL_MAP, then ESCALATION_RECIPIENT.
+    """
+    mapped = config.TEAM_EMAIL_MAP.get((owner or "").strip().lower())
+    if mapped:
+        return mapped, "team_email_map"
+
+    if suggested:
+        candidate = suggested.strip()
+        domain = candidate.rsplit("@", 1)[-1].lower() if "@" in candidate else ""
+        looks_real = domain and domain not in _PLACEHOLDER_EMAIL_DOMAINS
+        if looks_real:
+            return candidate, "model_supplied"
+
+    return config.ESCALATION_RECIPIENT, "escalation_recipient_default"
+
+
 def propose_escalation(commitment_id: str, recipient_email: str, reason: str) -> dict:
     """Draft an escalation email for a blocked commitment and put it in the
     approval queue. This does NOT send anything. Tell the user the draft is
@@ -41,12 +74,19 @@ def propose_escalation(commitment_id: str, recipient_email: str, reason: str) ->
 
     Args:
         commitment_id: The commitment that is blocked.
-        recipient_email: Who the escalation should go to.
+        recipient_email: Who the escalation should go to. If you do not know
+            the person's real address, pass an empty string — do not invent
+            one. The system routes it to the configured escalation contact.
         reason: Why escalation is needed.
     """
     cmt = store.get_commitment(commitment_id)
     if not cmt:
         return {"status": "error", "message": "commitment not found"}
+
+    recipient_email, routing = resolve_recipient(cmt.get("owner", ""), recipient_email)
+    if not recipient_email:
+        return {"status": "error",
+                "message": "no recipient available: set ESCALATION_RECIPIENT or TEAM_EMAIL_MAP"}
 
     subject = f"[FollowThrough] Blocked: {cmt['description']}"
     body = (
@@ -75,6 +115,7 @@ def propose_escalation(commitment_id: str, recipient_email: str, reason: str) ->
         "subject": subject,
         "body": body,
         "recipient": recipient_email,
+        "recipient_routing": routing,
     }
 
 
@@ -141,7 +182,7 @@ def list_pending_escalations() -> dict:
 
 murph_agent = Agent(
     name="murph",
-    model=config.GEMINI_MODEL,
+    model=config.GEMINI_MODEL_MURPH,
     description="Voice/chat interface answering questions about commitments and handling approved escalations.",
     instruction=(
         "You are Murph, the voice assistant for FollowThrough. Answer "
@@ -149,7 +190,9 @@ murph_agent = Agent(
         "using list_commitment_status to check current state — never "
         "guess. If asked to escalate or 'ask someone' about a blocked "
         "task, call propose_escalation to draft the message, then tell the "
-        "user it is waiting for their approval in the dashboard. Sending an "
+        "user it is waiting for their approval in the dashboard. You do not "
+        "know anyone's email address — never invent one. Pass an empty string "
+        "for recipient_email and the system routes it correctly. Sending an "
         "email is irreversible, so you cannot approve one yourself: "
         "send_escalation only works on drafts a person has already approved, "
         "and it will refuse otherwise. If it refuses, say the draft still "
@@ -198,9 +241,11 @@ def _offline_ask_murph(query: str) -> str:
         cmt = blocked[0]
         draft = propose_escalation(
             commitment_id=cmt["id"],
-            recipient_email=config.ESCALATION_RECIPIENT or "teammate@example.com",
+            recipient_email="",  # resolve_recipient decides; see there
             reason=cmt.get("blocked_reason", "blocked"),
         )
+        if draft.get("status") == "error":
+            return f"Couldn't draft that: {draft['message']}"
         return (
             f"Drafted an escalation for '{cmt['description']}' to {draft['recipient']}. "
             "It's waiting for your approval in the dashboard — I can't send it myself."
@@ -240,15 +285,31 @@ async def ask_murph(query: str, session_id: str | None = None) -> dict:
             app_name="followthrough-murph", user_id="user"
         )
 
-    reply_text = ""
-    async for event in runner.run_async(
-        user_id="user",
-        session_id=session.id,
-        new_message=genai_types.Content(role="user", parts=[genai_types.Part(text=query)]),
-    ):
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                if part.text:
-                    reply_text += part.text
+    async def _run() -> str:
+        text = ""
+        async for event in runner.run_async(
+            user_id="user",
+            session_id=session.id,
+            new_message=genai_types.Content(role="user", parts=[genai_types.Part(text=query)]),
+        ):
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    if part.text:
+                        text += part.text
+        return text
+
+    try:
+        reply_text = await llm_retry.with_retry_async(_run, label="murph")
+    except Exception as e:
+        # Degrade to the deterministic keyword path rather than returning a 500.
+        # Murph going quiet mid-demo because Gemini is busy is a far worse
+        # failure than Murph answering from the same tools without the model.
+        print(f"[murph] model unavailable, falling back to keyword path: {str(e)[:200]}")
+        return {
+            "reply": _offline_ask_murph(query),
+            "session_id": session.id,
+            "degraded": True,
+            "degraded_reason": llm_retry.describe(e),
+        }
 
     return {"reply": reply_text.strip(), "session_id": session.id}

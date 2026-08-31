@@ -102,7 +102,20 @@ def wait_for_state(commitment_id, expected, timeout_seconds):
 def main():
     global _failures
     log_path = BACKEND_DIR / "smoke_test_server.log"
-    env = dict(os.environ, OFFLINE_MODE="true", GCP_PROJECT_ID="smoke-test")
+    # Force every per-service flag, not just the master switch. A developer's
+    # .env may set OFFLINE_GITHUB=false etc., and load_dotenv() fills in any
+    # variable we do not pass here — which would quietly turn this
+    # zero-credential test into one that hits real GitHub and Gemini.
+    env = dict(
+        os.environ,
+        OFFLINE_MODE="true",
+        OFFLINE_STORE="true",
+        OFFLINE_PUBSUB="true",
+        OFFLINE_GITHUB="true",
+        OFFLINE_GMAIL="true",
+        OFFLINE_LLM="true",
+        GCP_PROJECT_ID="smoke-test",
+    )
 
     print("Starting server in OFFLINE_MODE...")
     with log_path.open("w", encoding="utf-8") as log_file:

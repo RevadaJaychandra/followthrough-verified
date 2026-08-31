@@ -15,6 +15,7 @@ const KIND_ICON = {
   pr_merged: '⎇',
   verified: '✓',
   execution_failed: '✗',
+  execution_retried: '↻',
 };
 
 function formatTime(ts) {

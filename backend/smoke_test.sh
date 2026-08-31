@@ -31,7 +31,16 @@
 set -e
 cd "$(dirname "$0")"
 
+# Force every per-service flag, not just the master switch. A developer's .env
+# may set OFFLINE_GITHUB=false etc., and load_dotenv() fills in any variable we
+# do not set here -- which would quietly turn this zero-credential test into one
+# that hits real GitHub and Gemini.
 export OFFLINE_MODE=true
+export OFFLINE_STORE=true
+export OFFLINE_PUBSUB=true
+export OFFLINE_GITHUB=true
+export OFFLINE_GMAIL=true
+export OFFLINE_LLM=true
 export GCP_PROJECT_ID=smoke-test
 
 SMOKE_LOG=$(mktemp -t followthrough_smoke.XXXXXX.log)
@@ -113,7 +122,8 @@ echo "[7/8] Blocked commitment recovers (regression: BLOCKED was a dead end)"
 SMOKE67=$(python3 - <<'PYEOF'
 import asyncio, sys, os
 sys.path.insert(0, '.')
-os.environ['OFFLINE_MODE'] = 'true'
+for _flag in ('OFFLINE_MODE','OFFLINE_STORE','OFFLINE_PUBSUB','OFFLINE_GITHUB','OFFLINE_GMAIL','OFFLINE_LLM'):
+    os.environ[_flag] = 'true'
 os.environ['GCP_PROJECT_ID'] = 'smoke-test'
 import store
 from agents.execution_agent import execute_commitment

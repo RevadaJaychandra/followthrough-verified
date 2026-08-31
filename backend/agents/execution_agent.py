@@ -12,10 +12,15 @@ from google.adk.agents import Agent
 from google.adk.runners import InMemoryRunner
 from google.genai import types as genai_types
 
+import asyncio
+
 import config
+import llm_retry
 import pubsub_bus
 import store
 from tools.github_tool import create_github_issue, comment_on_issue
+
+
 
 
 def github_username_for(name: str) -> str:
@@ -32,7 +37,7 @@ def github_username_for(name: str) -> str:
 
 execution_agent = Agent(
     name="execution_agent",
-    model=config.GEMINI_MODEL,
+    model=config.GEMINI_MODEL_EXECUTION,
     description="Turns an approved commitment into a real GitHub issue with clear context.",
     instruction=(
         "You are the Execution Agent for FollowThrough. You are given one "
@@ -48,12 +53,69 @@ execution_agent = Agent(
 
 _runner = None
 
+# Commitments currently being executed. The monitoring loop re-drives anything
+# stuck at PLANNED, but a live ADK call can take longer than the 5s monitoring
+# tick — without this guard the retry fires while the first attempt is still in
+# flight and the commitment gets two GitHub issues. Observed exactly that:
+# issues #8 and #9 created for one commitment.
+_in_flight: set[str] = set()
+
 
 def _get_runner() -> InMemoryRunner:
     global _runner
     if _runner is None:
         _runner = InMemoryRunner(agent=execution_agent, app_name="followthrough")
     return _runner
+
+
+async def _run_agent_with_retry(prompt: str, cmt: dict, commitment_id: str,
+                                attempts: int = 3):
+    """Run the ADK agent, retrying Gemini's capacity errors.
+
+    Gemini answers 503 UNAVAILABLE ("experiencing high demand") under load.
+    Without a retry that becomes a commitment stuck at PLANNED with no issue
+    and no explanation — which is what it looked like the first time it
+    happened here, mid-run. Retrying costs a few seconds; not retrying costs
+    the demo.
+
+    Returns the create_github_issue tool result, or None if every attempt
+    failed. The monitoring agent re-drives anything left at PLANNED, so None
+    is recoverable rather than terminal.
+    """
+    runner = _get_runner()
+    delay = 2.0
+
+    for attempt in range(1, attempts + 1):
+        try:
+            session = await runner.session_service.create_session(
+                app_name="followthrough", user_id="system"
+            )
+            tool_result = None
+            async for event in runner.run_async(
+                user_id="system",
+                session_id=session.id,
+                new_message=genai_types.Content(
+                    role="user", parts=[genai_types.Part(text=prompt)]
+                ),
+            ):
+                if event.get_function_responses():
+                    for fr in event.get_function_responses():
+                        if fr.name == "create_github_issue":
+                            tool_result = fr.response
+            return tool_result
+
+        except Exception as e:
+            if not llm_retry.is_transient(e) or attempt == attempts:
+                store.log_event(
+                    meeting_id=cmt.get("meeting_id"), commitment_id=commitment_id,
+                    kind="execution_failed",
+                    message=f"Execution agent failed after {attempt} attempt(s): {str(e)[:200]}",
+                )
+                return None
+            print(f"[execution] transient model error (attempt {attempt}/{attempts}), "
+                  f"retrying in {delay:.0f}s: {str(e)[:120]}")
+            await asyncio.sleep(delay)
+            delay *= 2
 
 
 async def execute_commitment(commitment_id: str):
@@ -64,6 +126,16 @@ async def execute_commitment(commitment_id: str):
     dependency has actually reached COMPLETED/VERIFIED — otherwise park
     it as WAITING. The monitoring agent re-calls this once the
     dependency resolves (see monitoring_agent._check_dependency)."""
+    if commitment_id in _in_flight:
+        return  # already being executed by another caller
+    _in_flight.add(commitment_id)
+    try:
+        await _execute_commitment_inner(commitment_id)
+    finally:
+        _in_flight.discard(commitment_id)
+
+
+async def _execute_commitment_inner(commitment_id: str):
     cmt = store.get_commitment(commitment_id)
     if not cmt:
         return
@@ -101,11 +173,6 @@ async def execute_commitment(commitment_id: str):
             owner_github_username=assignee,
         )
     else:
-        runner = _get_runner()
-        session = await runner.session_service.create_session(
-            app_name="followthrough", user_id="system"
-        )
-
         prompt = (
             f"Commitment: {cmt['description']}\n"
             f"Owner: {cmt['owner']}\n"
@@ -114,19 +181,7 @@ async def execute_commitment(commitment_id: str):
                "The owner's GitHub username is unknown; leave it unassigned.\n")
             + "Create the GitHub issue now."
         )
-
-        tool_result = None
-        async for event in runner.run_async(
-            user_id="system",
-            session_id=session.id,
-            new_message=genai_types.Content(
-                role="user", parts=[genai_types.Part(text=prompt)]
-            ),
-        ):
-            if event.get_function_responses():
-                for fr in event.get_function_responses():
-                    if fr.name == "create_github_issue":
-                        tool_result = fr.response
+        tool_result = await _run_agent_with_retry(prompt, cmt, commitment_id)
 
     if tool_result and tool_result.get("status") == "success":
         store.update_commitment(

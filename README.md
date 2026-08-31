@@ -100,8 +100,10 @@ PASS: agent cannot self-approve: still PENDING_APPROVAL after 'yes send it'
 PASS: human approval sends it, commitment state updated
 ```
 
-See [`docs/03-PHASE-3-HARDENING.md`](docs/03-PHASE-3-HARDENING.md) for what
-this looked like before, and why prompt-level gating was not enough.
+The gate was originally one sentence of prompt text telling the agent not to
+send without approval. That is not a guarantee — a prompt injection in a
+transcript or a hallucinated "the user said yes" defeats it. Moving the
+decision into state made it one.
 
 ---
 
@@ -119,12 +121,8 @@ Copy `backend/.env.example` to `backend/.env` and fill in:
 | `GITHUB_USER_MAP` (optional) | `Name=github-username,Name=github-username` | Assigning created issues. An unmapped name is fine (unassigned issue); a **wrong** username makes GitHub reject the issue outright |
 | `GEMINI_API_KEY` (optional, alternative to Vertex) | https://aistudio.google.com/apikey | Faster path to test extraction alone before full GCP IAM is set up |
 
-There is a step-by-step runbook with verification checks for each integration
-in [`docs/02-PHASE-2-CREDENTIALS.md`](docs/02-PHASE-2-CREDENTIALS.md).
-
-Run `python3 config.py` after filling in `.env` — it tells you exactly
-which values are still missing or still placeholders, with no network
-call and no risk of leaking anything.
+Bring the integrations up one at a time and run `python config.py` after each —
+it reports exactly what is still missing, with no network calls.
 
 Once `.env` is filled in, run the app **without** `OFFLINE_MODE=true` —
 everything switches to real Gemini/Firestore/Pub/Sub/GitHub/Gmail calls
@@ -158,8 +156,7 @@ Both backends sit behind identical function signatures, so this is a config
 flag rather than a separate code path, and the smoke test passes in either
 configuration. The dashboard reads `/health` and shows a green
 `LIVE: GitHub · Gmail · Gemini` chip, so what is real is stated on screen
-rather than assumed. Full walkthrough:
-[`docs/06-FAST-PATH.md`](docs/06-FAST-PATH.md).
+rather than assumed.
 
 ---
 
@@ -307,14 +304,3 @@ static-serving Dockerfile — whichever is fastest for the team).
 - **Deliberately not done**: the API has no authentication. Adding it means an identity provider, token handling in the frontend, and a login step in the middle of the demo — real work to defend throwaway hackathon data for a weekend. What *was* done is the part that matters: CORS is restricted (`CORS_ALLOWED_ORIGINS`), so a random page in a browser cannot drive the escalation-approval endpoints.
 - **Offline mode** (`OFFLINE_MODE=true`): every external call (Gemini, Firestore, Pub/Sub, GitHub, Gmail) has an in-memory fallback behind the exact same function signatures, so the full pipeline is testable and demoable with zero credentials. This is a dev/testing aid, not part of the submission's live architecture — the real submission runs with `OFFLINE_MODE=false` and every call hitting the real Google Cloud + GitHub + Gmail services, which is what the architecture diagram and demo video should show. When it is on, the dashboard shows an `OFFLINE` chip so the UI never implies a real issue was filed.
 
-## Project documentation
-
-Each phase of work is recorded in [`docs/`](docs/):
-
-| Doc | Contents |
-|---|---|
-| [06-FAST-PATH.md](docs/06-FAST-PATH.md) | Real GitHub/Gemini/Gmail demo in ~30 min with no GCP project |
-| [00-PROJECT-AUDIT.md](docs/00-PROJECT-AUDIT.md) | Baseline audit: architecture, 16 identified gaps, phase plan |
-| [01-PHASE-1-PROVE-IT.md](docs/01-PHASE-1-PROVE-IT.md) | Getting it running; the BLOCKED-is-a-dead-end bug |
-| [02-PHASE-2-CREDENTIALS.md](docs/02-PHASE-2-CREDENTIALS.md) | Credential runbook — the one phase that needs a human |
-| [03-PHASE-3-HARDENING.md](docs/03-PHASE-3-HARDENING.md) | Enforcing the approval gate; closing the remaining gaps |

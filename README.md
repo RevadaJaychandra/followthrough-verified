@@ -130,6 +130,37 @@ Once `.env` is filled in, run the app **without** `OFFLINE_MODE=true` —
 everything switches to real Gemini/Firestore/Pub/Sub/GitHub/Gmail calls
 with no code changes needed.
 
+### You don't have to switch everything on at once
+
+`OFFLINE_MODE` is the default for five independent per-service flags, so you
+can bring services up one at a time — or skip GCP setup entirely:
+
+| Flag | Service |
+|---|---|
+| `OFFLINE_STORE` | Firestore |
+| `OFFLINE_PUBSUB` | Pub/Sub |
+| `OFFLINE_GITHUB` | GitHub issues/PRs |
+| `OFFLINE_GMAIL` | escalation email |
+| `OFFLINE_LLM` | Gemini + ADK agents |
+
+The most useful combination — **real GitHub, Gemini and Gmail with no GCP
+project, billing account, or `gcloud` install at all**:
+
+```env
+OFFLINE_MODE=true
+OFFLINE_GITHUB=false
+OFFLINE_GMAIL=false
+OFFLINE_LLM=false
+GEMINI_API_KEY=<from https://aistudio.google.com/apikey>
+```
+
+Both backends sit behind identical function signatures, so this is a config
+flag rather than a separate code path, and the smoke test passes in either
+configuration. The dashboard reads `/health` and shows a green
+`LIVE: GitHub · Gmail · Gemini` chip, so what is real is stated on screen
+rather than assumed. Full walkthrough:
+[`docs/06-FAST-PATH.md`](docs/06-FAST-PATH.md).
+
 ---
 
 ## Architecture
@@ -282,6 +313,7 @@ Each phase of work is recorded in [`docs/`](docs/):
 
 | Doc | Contents |
 |---|---|
+| [06-FAST-PATH.md](docs/06-FAST-PATH.md) | Real GitHub/Gemini/Gmail demo in ~30 min with no GCP project |
 | [00-PROJECT-AUDIT.md](docs/00-PROJECT-AUDIT.md) | Baseline audit: architecture, 16 identified gaps, phase plan |
 | [01-PHASE-1-PROVE-IT.md](docs/01-PHASE-1-PROVE-IT.md) | Getting it running; the BLOCKED-is-a-dead-end bug |
 | [02-PHASE-2-CREDENTIALS.md](docs/02-PHASE-2-CREDENTIALS.md) | Credential runbook — the one phase that needs a human |
